@@ -1,9 +1,5 @@
 [workspace]
-members = [
-    "lib",
-    "program",
-    "script",
-]
+members = ["lib", "program", "eth_program", "script"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -18,6 +14,12 @@ sp1-sdk = "5.0.4"
 sp1-lib = "5.0.4"
 sp1-primitives = "5.0.4"
 
+# Post-quantum cryptography (ML-DSA / CRYSTALS-Dilithium, FIPS-204)
+ml-dsa = { version = "0.1.0-rc.7", default-features = false, features = [
+    "rand_core",
+    "alloc",
+] }
+signature = "2"
+
 [patch.crates-io]
 sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", tag = "patch-sha2-0.10.8-sp1-4.0.0-rc.3" }
-

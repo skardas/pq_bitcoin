@@ -1,24 +1,30 @@
-//cargo run --release --bin evm -- --system groth16
-//! An end-to-end example of using the SP1 SDK to generate a proof of a program that can have an
-//! EVM-Compatible proof generated which can be verified on-chain.
+//! PQ Bitcoin — EVM Proof Generator
 //!
-//! You can run this script using the following command:
+//! Generates EVM-compatible proofs (Groth16 or PLONK) and saves fixture
+//! JSON files for Solidity contract testing.
+//!
+//! Usage:
 //! ```shell
 //! RUST_LOG=info cargo run --release --bin evm -- --system groth16
-//! ```
-//! or
-//! ```shell
 //! RUST_LOG=info cargo run --release --bin evm -- --system plonk
 //! ```
-/*
+
 use alloy_sol_types::SolType;
 use clap::{Parser, ValueEnum};
-use pq_bitcoin_lib::PublicValuesStruct;
+use hashes::{sha256, Hash};
+use pq_bitcoin_lib::{public_key_to_btc_address, validate_pq_pubkey, ml_dsa_level_name, PublicValuesStruct};
+use rand::rngs::OsRng;
+use rand::TryRngCore;
+use secp256k1::{ecdsa, Error, Message, PublicKey, Secp256k1, SecretKey, Signing};
 use serde::{Deserialize, Serialize};
 use sp1_sdk::{
     include_elf, HashableKey, ProverClient, SP1ProofWithPublicValues, SP1Stdin, SP1VerifyingKey,
 };
 use std::path::PathBuf;
+
+// ML-DSA imports
+use ml_dsa::ml_dsa_65;
+use signature::Signer;
 
 /// The ELF (executable and linkable format) file for the Succinct RISC-V zkVM.
 pub const PQ_BITCOIN_ELF: &[u8] = include_elf!("pq_bitcoin-program");
@@ -27,10 +33,6 @@ pub const PQ_BITCOIN_ELF: &[u8] = include_elf!("pq_bitcoin-program");
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct EVMArgs {
-    #[arg(long, default_value = "3")]
-    x: u32,
-    #[arg(long, default_value = "15")]
-    a: u32,
     #[arg(long, value_enum, default_value = "groth16")]
     system: ProofSystem,
 }
@@ -42,21 +44,35 @@ enum ProofSystem {
     Groth16,
 }
 
-/// A fixture that can be used to test the verification of SP1 zkVM proofs inside Solidity.
+/// A fixture that can be used to test the verification of SP1 PQ Bitcoin proofs inside Solidity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SP1FibonacciProofFixture {
-    x: u32,
-    a: u32,
-    y: u32,
+struct SP1PQBitcoinProofFixture {
+    btc_address: String,
+    pq_pubkey: String,
     vkey: String,
     public_values: String,
     proof: String,
 }
 
+fn sign<C: Signing>(
+    secp: &Secp256k1<C>,
+    sec_key: [u8; 32],
+) -> Result<(ecdsa::Signature, PublicKey, Vec<u8>), Error> {
+    let sec_key = SecretKey::from_slice(&sec_key)?;
+    let pub_key = sec_key.public_key(secp);
+    let address = public_key_to_btc_address(&pub_key.serialize());
+
+    let msg = sha256::Hash::hash(address.as_slice());
+    let msg = Message::from_digest_slice(msg.as_ref())?;
+
+    Ok((secp.sign_ecdsa(&msg, &sec_key), pub_key, address))
+}
+
 fn main() {
     // Setup the logger.
     sp1_sdk::utils::setup_logger();
+    dotenv::dotenv().ok();
 
     // Parse the command line arguments.
     let args = EVMArgs::parse();
@@ -67,13 +83,38 @@ fn main() {
     // Setup the program.
     let (pk, vk) = client.setup(PQ_BITCOIN_ELF);
 
-    // Setup the inputs.
-    let mut stdin = SP1Stdin::new();
-    stdin.write(&args.x);
-    println!("x: {}", args.x);
+    // ── 1. Generate ECDSA keypair and sign ──────────────────────
+    let secp = Secp256k1::new();
+    let mut seckey = [0u8; 32];
+    OsRng
+        .try_fill_bytes(&mut seckey)
+        .expect("cannot fill random bytes");
 
-    stdin.write(&args.a);
-    println!("a: {}", args.a);
+    let (sig, pub_key, address) = sign(&secp, seckey).unwrap();
+    let serialized_pub_key = pub_key.serialize();
+    let serialize_sig = sig.serialize_compact();
+
+    println!("BTC Address (hex): {}", hex::encode(&address));
+
+    // ── 2. Generate ML-DSA-65 post-quantum keypair ─────────────
+    let mut rng = OsRng;
+    let pq_signing_key = ml_dsa_65::SigningKey::generate(&mut rng);
+    let pq_verifying_key = pq_signing_key.verifying_key();
+    let pq_public_key_bytes = pq_verifying_key.as_ref().to_vec();
+
+    assert!(validate_pq_pubkey(&pq_public_key_bytes),
+        "Generated PQ public key has invalid size: {}", pq_public_key_bytes.len());
+    println!("PQ Key Type: {} ({} bytes)", ml_dsa_level_name(&pq_public_key_bytes), pq_public_key_bytes.len());
+
+    // Sign the address with PQ key to demonstrate it works
+    let _pq_sig = pq_signing_key.sign(&address);
+
+    // ── 3. Feed inputs to SP1 zkVM ─────────────────────────────
+    let mut stdin = SP1Stdin::new();
+    stdin.write(&serialized_pub_key.to_vec());
+    stdin.write(&address.to_vec());
+    stdin.write(&serialize_sig.to_vec());
+    stdin.write(&pq_public_key_bytes);
 
     println!("Proof System: {:?}", args.system);
 
@@ -82,7 +123,7 @@ fn main() {
         ProofSystem::Plonk => client.prove(&pk, &stdin).plonk().run(),
         ProofSystem::Groth16 => client.prove(&pk, &stdin).groth16().run(),
     }
-        .expect("failed to generate proof");
+    .expect("failed to generate proof");
 
     create_proof_fixture(&proof, &vk, args.system);
 }
@@ -95,33 +136,23 @@ fn create_proof_fixture(
 ) {
     // Deserialize the public values.
     let bytes = proof.public_values.as_slice();
-    let PublicValuesStruct { x, a, y } = PublicValuesStruct::abi_decode(bytes).unwrap();
+    let PublicValuesStruct { btc_address, pq_pubkey } =
+        PublicValuesStruct::abi_decode(bytes).unwrap();
 
     // Create the testing fixture so we can test things end-to-end.
-    let fixture = SP1FibonacciProofFixture {
-        x,
-        a,
-        y,
+    let fixture = SP1PQBitcoinProofFixture {
+        btc_address: format!("0x{}", hex::encode(&btc_address)),
+        pq_pubkey: format!("0x{}", hex::encode(&pq_pubkey)),
         vkey: vk.bytes32().to_string(),
         public_values: format!("0x{}", hex::encode(bytes)),
         proof: format!("0x{}", hex::encode(proof.bytes())),
     };
 
-    // The verification key is used to verify that the proof corresponds to the execution of the
-    // program on the given input.
-    //
-    // Note that the verification key stays the same regardless of the input.
     println!("Verification Key: {}", fixture.vkey);
-
-    // The public values are the values which are publicly committed to by the zkVM.
-    //
-    // If you need to expose the inputs or outputs of your program, you should commit them in
-    // the public values.
-    println!("Public Values: {}", fixture.public_values);
-
-    // The proof proves to the verifier that the program was executed with some inputs that led to
-    // the give public values.
-    println!("Proof Bytes: {}", fixture.proof);
+    println!("BTC Address: {}", fixture.btc_address);
+    println!("PQ Pubkey length: {} bytes", pq_pubkey.len());
+    println!("Public Values length: {} bytes", bytes.len());
+    println!("Proof length: {} bytes", proof.bytes().len());
 
     // Save the fixture to a file.
     let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../contracts/src/fixtures");
@@ -130,9 +161,7 @@ fn create_proof_fixture(
         fixture_path.join(format!("{:?}-fixture.json", system).to_lowercase()),
         serde_json::to_string_pretty(&fixture).unwrap(),
     )
-        .expect("failed to write fixture");
-}
-*/
-fn main() {
-    println!("Hello, world!");
+    .expect("failed to write fixture");
+
+    println!("Fixture saved to contracts/src/fixtures/{:?}-fixture.json", system);
 }
