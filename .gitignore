@@ -18,6 +18,5 @@ pgo-data.profdata
 # Env
 .env
 
-/docs/**
-/docs/*
-/docs
+# Docs (ignore PDFs, allow markdown)
+/docs/*.pdf
