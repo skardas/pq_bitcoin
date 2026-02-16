@@ -46,7 +46,8 @@ pub fn main() {
     );
 
     // ── 2. Verify BTC address derivation ───────────────────────
-    let derived_btc_address = public_key_to_btc_address(&pubkey);
+    let derived_btc_address =
+        public_key_to_btc_address(&pubkey).expect("BTC address derivation failed");
     assert_eq!(
         derived_btc_address, btc_address,
         "Derived BTC address does not match provided address"

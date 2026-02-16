@@ -63,7 +63,7 @@ fn sign<C: Signing>(
 ) -> Result<(ecdsa::Signature, PublicKey, Vec<u8>), Error> {
     let sec_key = SecretKey::from_slice(&sec_key)?;
     let pub_key = sec_key.public_key(secp);
-    let address = public_key_to_btc_address(&pub_key.serialize());
+    let address = public_key_to_btc_address(&pub_key.serialize()).unwrap();
 
     let msg = sha256::Hash::hash(address.as_slice());
     let msg = Message::from_digest_slice(msg.as_ref())?;

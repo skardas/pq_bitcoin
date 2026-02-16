@@ -1,11 +1,29 @@
 # PQ Bitcoin — Migrating Bitcoin and Ethereum Addresses to the Quantum Blockchain Era
 
-A **post-quantum Bitcoin and Ethereum address migration framework** built on SP1 zkVM, implementing the research paper *"Quantum-Resistant Framework for Bitcoin and Ethereum Using Post-Quantum Signatures and STARK Circuits"*.
+A **post-quantum Bitcoin and Ethereum address migration SDK** built on SP1 zkVM, implementing the research paper *"Quantum-Resistant Framework for Bitcoin and Ethereum Using Post-Quantum Signatures and STARK Circuits"*.
+
+```mermaid
+flowchart LR
+    subgraph SDK["pq-bitcoin SDK"]
+        A["🔑 ECDSA Key"] --> B["📍 BTC/ETH Address"]
+        C["🛡️ ML-DSA Key"] --> D["📦 Migration Payload"]
+        B --> D
+        D --> E{"Path"}
+    end
+
+    E -->|Bitcoin L1| F["OP_RETURN TX"]
+    E -->|Taproot| G["P2TR Address"]
+    E -->|EVM| H["SP1 zkProof"]
+
+    F --> I["🔍 Indexer"]
+    H --> J["📜 PQBitcoin.sol"]
+```
 
 ---
 
 ## Table of Contents
 
+- [SDK Installation](#sdk-installation)
 - [Motivation](#motivation)
 - [Cryptographic Foundations](#cryptographic-foundations)
 - [Migration Protocol](#migration-protocol)
@@ -18,6 +36,73 @@ A **post-quantum Bitcoin and Ethereum address migration framework** built on SP1
 - [Quick Start](#quick-start)
 - [Test Coverage](#test-coverage)
 - [References](#references)
+
+---
+
+## SDK Installation
+
+Add the library to your Rust project:
+
+```sh
+cargo add pq-bitcoin
+```
+
+### Quick Example
+
+```rust
+use pq_bitcoin::{public_key_to_btc_address, validate_pq_pubkey};
+use pq_bitcoin::op_return::MigrationPayload;
+
+// Derive BTC address from compressed ECDSA public key
+let pubkey = hex::decode("0279be66...f81798").unwrap();
+let address = public_key_to_btc_address(&pubkey).unwrap();
+
+// Create OP_RETURN migration payload
+let pq_key = vec![0xAA; 1952]; // ML-DSA-65 public key
+let proof = vec![0xBB; 256];    // STARK proof bytes
+let payload = MigrationPayload::new(&pq_key, &proof, 0);
+let script = payload.to_script(); // Ready for Bitcoin TX
+```
+
+### SDK API Overview
+
+```mermaid
+classDiagram
+    class pq_bitcoin {
+        +public_key_to_btc_address(pubkey) Result~Vec~
+        +public_key_to_eth_address(pubkey) Result~Vec~
+        +validate_pq_pubkey(key) bool
+        +ml_dsa_level_name(key) str
+    }
+
+    class MigrationPayload {
+        +new(pq_key, proof, flags) Self
+        +from_script(script) Option~Self~
+        +to_script() Vec~u8~
+        +encode() Vec~u8~
+        +verify_pq_commitment(key) bool
+    }
+
+    class PQMigrationTree {
+        +new(pq_pubkey, timelock) Self
+        +tweak_hash(internal_key) [u8;32]
+        +pq_leaf_control_block() Vec~u8~
+        +verify_pq_commitment(key) bool
+    }
+
+    class PQBitcoinError {
+        InvalidKeyLength
+        InvalidPQKeySize
+        HashError
+        Secp256k1Error
+    }
+
+    pq_bitcoin --> MigrationPayload : op_return
+    pq_bitcoin --> PQMigrationTree : taproot
+    pq_bitcoin --> PQBitcoinError : error
+```
+
+> See [`examples/basic_migration.rs`](examples/basic_migration.rs) and [`examples/taproot_commitment.rs`](examples/taproot_commitment.rs) for full working examples.
 
 ---
 
@@ -237,13 +322,47 @@ The SP1 prover uses the **FRI (Fast Reed-Solomon Interactive Oracle Proof)** pro
 
 ## Architecture
 
+```mermaid
+graph TD
+    subgraph LIB["📦 pq-bitcoin (lib/)"]
+        L1["lib.rs — BTC/ETH derivation, ML-DSA constants"]
+        L2["error.rs — PQBitcoinError enum"]
+        L3["op_return.rs — OP_RETURN payload format"]
+        L4["taproot.rs — BIP-341 PQ commitment tree"]
+    end
+
+    subgraph CIRCUITS["⚡ SP1 zkVM Circuits"]
+        P1["program/ — BTC circuit"]
+        P2["eth_program/ — ETH circuit"]
+    end
+
+    subgraph HOST["🖥️ Host Scripts (script/)"]
+        S1["main.rs — Key gen + execute/prove"]
+        S2["evm.rs — EVM proof + fixture JSON"]
+        S3["btc_migrate.rs — OP_RETURN generator"]
+        S4["taproot_addr.rs — P2TR address gen"]
+        S5["vkey.rs — Verification key"]
+    end
+
+    subgraph ONCHAIN["🔗 On-Chain"]
+        C1["PQBitcoin.sol — Migration verifier"]
+        IX["indexer/ — REST API"]
+    end
+
+    LIB --> CIRCUITS
+    LIB --> HOST
+    HOST --> ONCHAIN
+    CIRCUITS --> HOST
+```
+
 ```
 pq_bitcoin/
-├── lib/                        # Shared library
+├── lib/                        # Core SDK library (crate: pq-bitcoin)
 │   ├── src/
-│   │   ├── lib.rs              # BTC/ETH derivation, ML-DSA constants, 28 unit tests
-│   │   ├── op_return.rs        # OP_RETURN payload format, script gen/parse, 32 tests
-│   │   └── taproot.rs          # BIP-341 Taproot PQ commitment tree, 35 tests
+│   │   ├── lib.rs              # BTC/ETH derivation, ML-DSA constants, ABI types
+│   │   ├── error.rs            # PQBitcoinError enum (SDK error handling)
+│   │   ├── op_return.rs        # OP_RETURN payload format, script gen/parse
+│   │   └── taproot.rs          # BIP-341 Taproot PQ commitment tree
 │   └── tests/
 │       └── btc_migrate_integration.rs  # 12 end-to-end integration tests
 │
@@ -266,37 +385,54 @@ pq_bitcoin/
 │   └── test/PQBitcoin.t.sol    # Foundry tests (Groth16 + PLONK suites)
 │
 ├── indexer/                    # Migration indexer service
-│   └── src/main.rs             # REST API for scanning OP_RETURN migrations (23 tests)
+│   └── src/main.rs             # REST API for scanning OP_RETURN migrations
 │
-└── docs/                       # Research paper + BIP draft
-    └── BIP-CHECKQUANTUMSIG.md  # OP_CHECKQUANTUMSIG BIP specification
+├── examples/                   # SDK usage examples
+│   ├── basic_migration.rs      # OP_RETURN payload workflow
+│   └── taproot_commitment.rs   # Taproot PQ key commitment
+│
+├── docs/                       # Research paper + BIP draft
+│   └── BIP-CHECKQUANTUMSIG.md  # OP_CHECKQUANTUMSIG BIP specification
+│
+├── CONTRIBUTING.md             # Contribution guidelines
+├── SECURITY.md                 # Security policy & disclosure
+└── LICENSE-MIT
 ```
 
 ### Dual Verification Paths
 
 ```mermaid
 graph TD
-    subgraph "Key Generation"
-        A["secp256k1 + ML-DSA-65<br/>key generation"]
+    subgraph GEN["🔑 Key Generation"]
+        A["secp256k1 + ML-DSA-65"]
     end
 
-    subgraph "SP1 zkVM"
-        A --> B["BTC Circuit<br/>program/"]
-        A --> C["ETH Circuit<br/>eth_program/"]
+    subgraph ZK["⚡ SP1 zkVM"]
+        A --> B["BTC Circuit"]
+        A --> C["ETH Circuit"]
     end
 
-    subgraph "Bitcoin Path"
-        B --> D["btc_migrate.rs"]
-        D --> E["OP_RETURN TX<br/>'PQMG' + SHA-256 hashes"]
-        E --> F["Bitcoin Network"]
-        F --> G["Migration Indexer<br/>scans for PQMG"]
+    subgraph BTC["₿ Bitcoin Path"]
+        B --> D["btc_migrate"]
+        D --> E["OP_RETURN TX"]
+        E --> F["Bitcoin L1"]
+        F --> G["🔍 Indexer"]
+
+        B --> TA["taproot_addr"]
+        TA --> TB["P2TR Address"]
+        TB --> F
     end
 
-    subgraph "Ethereum Path"
+    subgraph ETH["Ξ Ethereum Path"]
         B --> H["evm.rs"]
         C --> H
-        H --> I["Groth16 / PLONK<br/>wrapped proof"]
-        I --> J["PQBitcoin.sol<br/>on-chain registry"]
+        H --> I["Groth16 / PLONK"]
+        I --> J["PQBitcoin.sol"]
+    end
+
+    subgraph L2["🔗 Bitcoin L2 Path"]
+        I --> K["BOB / Citrea / Botanix"]
+        K --> L["PQBitcoin.sol on L2"]
     end
 ```
 
@@ -621,7 +757,7 @@ curl -X POST http://127.0.0.1:3000/scan \
 ### Requirements
 
 - [Rust](https://rustup.rs/) (stable, edition 2024)
-- [SP1](https://docs.succinct.xyz/docs/sp1/getting-started/install) (v5.0.4)
+- [SP1](https://docs.succinct.xyz/docs/sp1/getting-started/install) (v5.x)
 - [Foundry](https://book.getfoundry.sh/getting-started/installation) (for Solidity tests)
 
 ### 1. Execute (No Proof)
@@ -631,7 +767,7 @@ cd script
 cargo run --release -- --execute
 ```
 
-Generates fresh secp256k1 + ML-DSA-65 keypairs, derives BTC address, runs the zkVM program, and reports cycle count.
+Generates fresh secp256k1 + ML-DSA-65 keypairs, derives BTC address, runs the zkVM program, and reports cycle count (~541K cycles, ~90ms).
 
 ### 2. Generate Proof
 
@@ -653,8 +789,8 @@ cargo run --release --bin evm -- --system plonk
 ### 4. Run All Tests
 
 ```sh
-# ── Rust library + integration tests (111 tests) ──────────────
-cargo test --package pq_bitcoin-lib
+# ── Rust library + integration tests + doctests (113 tests) ────
+cargo test -p pq-bitcoin
 
 # ── Migration indexer tests (23 tests) ─────────────────────────
 cd indexer && cargo test && cd ..
@@ -662,21 +798,24 @@ cd indexer && cargo test && cd ..
 # ── Solidity contract tests (12 tests) ─────────────────────────
 cd contracts && forge test -vvv
 
-# ── Rust coverage report ───────────────────────────────────────
-cargo llvm-cov --package pq_bitcoin-lib
-
-# ── Solidity coverage report ───────────────────────────────────
-cd contracts && forge coverage
-
-# ── Run everything at once (134 Rust + 12 Solidity) ────────────
-cargo test --package pq_bitcoin-lib && cd indexer && cargo test && cd ../contracts && forge test -vvv && cd ..
+# ── Run everything at once (136 Rust + 12 Solidity = 148) ──────
+cargo test -p pq-bitcoin && cd indexer && cargo test && cd ../contracts && forge test -vvv && cd ..
 ```
 
 ---
 
 ## Test Coverage
 
-### Rust Library — 99 Unit Tests
+```mermaid
+pie title Test Distribution (148 total)
+    "Unit Tests" : 99
+    "Integration Tests" : 12
+    "Doctests" : 2
+    "Indexer Tests" : 23
+    "Solidity Tests" : 12
+```
+
+### Rust Library — 99 Unit Tests + 2 Doctests
 
 | Category | Tests | What's Covered |
 |----------|-------|----------------|
@@ -702,7 +841,8 @@ cargo test --package pq_bitcoin-lib && cd indexer && cargo test && cd ../contrac
 | PQ Migration Tree | 7 | Build, different keys, different timelocks, verify commitment (valid/invalid), tweak hash |
 | Control Blocks | 4 | PQ leaf structure, parity bit, timelock leaf structure, different siblings |
 | Edge Cases | 3 | ML-DSA-44 key, ML-DSA-87 key, timelock boundaries (16/128) |
-| **Total** | **99** | |
+| Doctests | 2 | Crate-level quick start, `public_key_to_btc_address()` |
+| **Total** | **101** | |
 
 ### Integration Tests — 12 Tests
 
@@ -732,15 +872,16 @@ cargo test --package pq_bitcoin-lib && cd indexer && cargo test && cd ../contrac
 | PLONK | 4 | Valid proof, view-only, replay protection, invalid proof revert |
 | **Total** | **12** | **100%** lines, statements, branches, functions |
 
-### Grand Total: 146 Tests
+### Grand Total: 148 Tests
 
 | Suite | Count |
 |-------|-------|
 | Rust Unit Tests | 99 |
+| Rust Doctests | 2 |
 | Rust Integration Tests | 12 |
 | Indexer Tests | 23 |
 | Solidity Tests | 12 |
-| **Total** | **146** |
+| **Total** | **148** |
 
 ---
 
@@ -752,6 +893,14 @@ cargo test --package pq_bitcoin-lib && cd indexer && cargo test && cd ../contrac
 4. [RustCrypto/ml-dsa](https://github.com/RustCrypto/signatures/tree/master/ml-dsa) — Rust ML-DSA implementation
 5. [Bitcoin Wiki: Technical Background of Addresses](https://en.bitcoin.it/wiki/Technical_background_of_version_1_Bitcoin_addresses) — P2PKH derivation
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
+
 ## License
 
-MIT
+MIT — Copyright (c) 2024-2026 Süleyman Kardaş

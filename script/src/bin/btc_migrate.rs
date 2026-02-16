@@ -53,7 +53,7 @@ fn main() {
     println!("ECDSA Public Key:  {}", hex::encode(compressed_pubkey));
 
     // ── 2. Derive BTC address ──────────────────────────────────
-    let btc_address = public_key_to_btc_address(&compressed_pubkey);
+    let btc_address = public_key_to_btc_address(&compressed_pubkey).unwrap();
     println!("BTC Address:       {}", hex::encode(&btc_address));
 
     // ── 3. PQ keypair ──────────────────────────────────────────

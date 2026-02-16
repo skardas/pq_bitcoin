@@ -4,9 +4,9 @@ name = "pq_bitcoin-program"
 edition = "2024"
 
 [dependencies]
-pq_bitcoin-lib = { path = "../lib" }
+pq_bitcoin-lib = { package = "pq-bitcoin", path = "../lib" }
 alloy-sol-types = { workspace = true }
 alloy-primitives = { workspace = true }
 sp1-zkvm = { workspace = true }
 hashes = { workspace = true }
-secp256k1 = {workspace = true}
+secp256k1 = { workspace = true }

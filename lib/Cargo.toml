@@ -1,7 +1,18 @@
 [package]
-name = "pq_bitcoin-lib"
+name = "pq-bitcoin"
 version = "0.1.0"
 edition = "2024"
+description = "Post-quantum Bitcoin address migration SDK using SP1 zkSTARK proofs and ML-DSA (FIPS-204) lattice signatures"
+license = "MIT"
+repository = "https://github.com/skardas/pq_bitcoin"
+homepage = "https://github.com/skardas/pq_bitcoin"
+keywords = ["bitcoin", "post-quantum", "ml-dsa", "zero-knowledge", "taproot"]
+categories = ["cryptography", "no-std"]
+readme = "../README.md"
+
+[features]
+default = ["std"]
+std = []
 
 [dependencies]
 alloy-sol-types = { workspace = true }

@@ -5,11 +5,11 @@
 //! which is slow in debug mode).
 
 use hashes::{Hash, sha256};
-use pq_bitcoin_lib::op_return::{
+use pq_bitcoin::op_return::{
     FLAG_DUAL_SIG, FLAG_GROTH16, FLAG_PLONK, LEVEL_ML_DSA_44, LEVEL_ML_DSA_65, LEVEL_ML_DSA_87,
     MAGIC, MigrationPayload, PAYLOAD_SIZE, VERSION,
 };
-use pq_bitcoin_lib::{ml_dsa_level_name, public_key_to_btc_address, validate_pq_pubkey};
+use pq_bitcoin::{ml_dsa_level_name, public_key_to_btc_address, validate_pq_pubkey};
 
 // ============================================================
 //  End-to-End Migration Flow
@@ -31,7 +31,7 @@ fn test_full_migration_flow_ml_dsa_65() {
     };
 
     // 2. Derive BTC address.
-    let btc_address = public_key_to_btc_address(&ecdsa_pubkey);
+    let btc_address = public_key_to_btc_address(&ecdsa_pubkey).unwrap();
     assert_eq!(btc_address.len(), 25); // 1 version + 20 hash + 4 checksum
 
     // 3. Simulated ML-DSA-65 public key.
@@ -75,7 +75,7 @@ fn test_full_migration_flow_ml_dsa_44() {
         k.extend_from_slice(&[0x11; 32]);
         k
     };
-    let btc_address = public_key_to_btc_address(&ecdsa_pubkey);
+    let btc_address = public_key_to_btc_address(&ecdsa_pubkey).unwrap();
 
     let pq_pubkey = vec![0xDD; 1312]; // ML-DSA-44
     assert!(validate_pq_pubkey(&pq_pubkey));
@@ -98,7 +98,7 @@ fn test_full_migration_flow_ml_dsa_87() {
         k.extend_from_slice(&[0x22; 32]);
         k
     };
-    let btc_address = public_key_to_btc_address(&ecdsa_pubkey);
+    let btc_address = public_key_to_btc_address(&ecdsa_pubkey).unwrap();
 
     let pq_pubkey = vec![0xEE; 2592]; // ML-DSA-87
     assert!(validate_pq_pubkey(&pq_pubkey));
@@ -222,8 +222,8 @@ fn test_btc_address_deterministic() {
         k.extend_from_slice(&[0xAA; 32]);
         k
     };
-    let addr1 = public_key_to_btc_address(&pubkey);
-    let addr2 = public_key_to_btc_address(&pubkey);
+    let addr1 = public_key_to_btc_address(&pubkey).unwrap();
+    let addr2 = public_key_to_btc_address(&pubkey).unwrap();
     assert_eq!(addr1, addr2);
     assert_eq!(addr1.len(), 25);
 }
@@ -241,8 +241,8 @@ fn test_different_keys_different_addresses() {
         k.extend_from_slice(&[0xBB; 32]);
         k
     };
-    let addr1 = public_key_to_btc_address(&key1);
-    let addr2 = public_key_to_btc_address(&key2);
+    let addr1 = public_key_to_btc_address(&key1).unwrap();
+    let addr2 = public_key_to_btc_address(&key2).unwrap();
     assert_ne!(addr1, addr2);
 }
 

@@ -1,5 +1,38 @@
+//! # PQ Bitcoin SDK
+//!
+//! A Rust SDK for **post-quantum Bitcoin address migration** using
+//! zero-knowledge proofs (SP1 zkSTARK) and ML-DSA (FIPS-204) lattice signatures.
+//!
+//! ## Features
+//!
+//! - **BTC/ETH address derivation** from compressed/uncompressed ECDSA keys
+//! - **ML-DSA validation** for post-quantum public keys (ML-DSA-44/65/87)
+//! - **OP_RETURN payloads** for on-chain migration commitments
+//! - **Taproot script trees** (BIP-341) for PQ key binding
+//! - **ABI-compatible structs** for Solidity contract integration
+//!
+//! ## Quick Start
+//!
+//! ```rust
+//! use pq_bitcoin::{public_key_to_btc_address, validate_pq_pubkey};
+//! use pq_bitcoin::op_return::MigrationPayload;
+//!
+//! // Derive BTC address from compressed ECDSA public key
+//! let pubkey = hex::decode("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798").unwrap();
+//! let address = public_key_to_btc_address(&pubkey).unwrap();
+//!
+//! // Create OP_RETURN migration payload
+//! let pq_key = vec![0xAA; 1952]; // ML-DSA-65 public key
+//! let proof = vec![0xBB; 256];    // STARK proof bytes
+//! let payload = MigrationPayload::new(&pq_key, &proof, 0);
+//! let script = payload.to_script(); // Ready for Bitcoin TX
+//! ```
+
+pub mod error;
 pub mod op_return;
 pub mod taproot;
+
+pub use error::PQBitcoinError;
 
 use alloy_sol_types::sol;
 use sha3::{Digest, Keccak256};
@@ -36,15 +69,35 @@ pub const ML_DSA_MAX_PK_SIZE: usize = 2592;
 //  Bitcoin Address Derivation (P2PKH)
 // ============================================================
 
-pub fn public_key_to_btc_address(pubkey: &[u8]) -> Vec<u8> {
-    assert_eq!(
-        pubkey.len(),
-        33,
-        "Public key should be 33 bytes (compressed)"
-    );
+/// Derive a P2PKH Bitcoin address (25 bytes) from a 33-byte compressed public key.
+///
+/// Returns a 25-byte vector: `[version(1) | RIPEMD160(SHA256(pubkey))(20) | checksum(4)]`.
+///
+/// # Errors
+///
+/// Returns [`PQBitcoinError::InvalidKeyLength`] if `pubkey` is not exactly 33 bytes.
+///
+/// # Example
+///
+/// ```rust
+/// use pq_bitcoin::public_key_to_btc_address;
+///
+/// let pubkey = hex::decode("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798").unwrap();
+/// let address = public_key_to_btc_address(&pubkey).unwrap();
+/// assert_eq!(address.len(), 25);
+/// ```
+pub fn public_key_to_btc_address(pubkey: &[u8]) -> Result<Vec<u8>, PQBitcoinError> {
+    if pubkey.len() != 33 {
+        return Err(PQBitcoinError::InvalidKeyLength {
+            context: "compressed public key",
+            expected: 33,
+            actual: pubkey.len(),
+        });
+    }
     // Step 1: SHA-256 hash
     let msg = sha256::Hash::hash(pubkey);
-    let msg = Message::from_digest_slice(msg.as_ref()).unwrap();
+    let msg = Message::from_digest_slice(msg.as_ref())
+        .map_err(|e| PQBitcoinError::HashError(e.to_string()))?;
 
     // Step 2: RIPEMD-160 hash
     let ripemd160_hash = ripemd160::Hash::hash(msg.as_ref());
@@ -56,32 +109,44 @@ pub fn public_key_to_btc_address(pubkey: &[u8]) -> Vec<u8> {
 
     // Step 4: Checksum calculation (double SHA-256)
     let msg = sha256::Hash::hash(versioned_payload.as_slice());
-    let msg = Message::from_digest_slice(msg.as_ref()).unwrap();
+    let msg = Message::from_digest_slice(msg.as_ref())
+        .map_err(|e| PQBitcoinError::HashError(e.to_string()))?;
     let msg = sha256::Hash::hash(msg.as_ref());
-    let checksum_full = Message::from_digest_slice(msg.as_ref()).unwrap();
+    let checksum_full = Message::from_digest_slice(msg.as_ref())
+        .map_err(|e| PQBitcoinError::HashError(e.to_string()))?;
     let checksum = &checksum_full[0..4];
 
     // Step 5: Append checksum
     versioned_payload.extend(checksum);
-    versioned_payload
+    Ok(versioned_payload)
 }
 
 // ============================================================
 //  Ethereum Address Derivation (Keccak-256)
 // ============================================================
 
-pub fn public_key_to_eth_address(pubkey: &[u8]) -> Vec<u8> {
-    assert_eq!(
-        pubkey.len(),
-        64,
-        "Public key should be 64 bytes (uncompressed, without 0x04 prefix)"
-    );
+/// Derive an Ethereum address (20 bytes) from a 64-byte uncompressed public key.
+///
+/// The public key should be 64 bytes (without the `0x04` prefix).
+/// The address is the last 20 bytes of the Keccak-256 hash.
+///
+/// # Errors
+///
+/// Returns [`PQBitcoinError::InvalidKeyLength`] if `pubkey` is not exactly 64 bytes.
+pub fn public_key_to_eth_address(pubkey: &[u8]) -> Result<Vec<u8>, PQBitcoinError> {
+    if pubkey.len() != 64 {
+        return Err(PQBitcoinError::InvalidKeyLength {
+            context: "uncompressed public key (sans 0x04 prefix)",
+            expected: 64,
+            actual: pubkey.len(),
+        });
+    }
     let mut hasher = Keccak256::new();
     hasher.update(pubkey);
     let hash = hasher.finalize();
 
     // Ethereum address = last 20 bytes of Keccak-256 hash
-    hash[12..].to_vec()
+    Ok(hash[12..].to_vec())
 }
 
 // ============================================================
@@ -125,7 +190,7 @@ mod tests {
                 .unwrap();
         assert_eq!(pubkey.len(), 33);
 
-        let address = public_key_to_btc_address(&pubkey);
+        let address = public_key_to_btc_address(&pubkey).unwrap();
         // P2PKH address = 25 bytes (1 version + 20 hash + 4 checksum)
         assert_eq!(address.len(), 25);
         // Version byte should be 0x00 (mainnet)
@@ -138,16 +203,25 @@ mod tests {
             hex::decode("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
                 .unwrap();
 
-        let addr1 = public_key_to_btc_address(&pubkey);
-        let addr2 = public_key_to_btc_address(&pubkey);
+        let addr1 = public_key_to_btc_address(&pubkey).unwrap();
+        let addr2 = public_key_to_btc_address(&pubkey).unwrap();
         assert_eq!(addr1, addr2);
     }
 
     #[test]
-    #[should_panic(expected = "Public key should be 33 bytes")]
     fn test_btc_address_invalid_pubkey_length() {
         let short_key = vec![0u8; 32];
-        public_key_to_btc_address(&short_key);
+        let result = public_key_to_btc_address(&short_key);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PQBitcoinError::InvalidKeyLength {
+                expected, actual, ..
+            } => {
+                assert_eq!(expected, 33);
+                assert_eq!(actual, 32);
+            }
+            _ => panic!("Expected InvalidKeyLength error"),
+        }
     }
 
     #[test]
@@ -155,7 +229,7 @@ mod tests {
         let pubkey =
             hex::decode("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
                 .unwrap();
-        let address = public_key_to_btc_address(&pubkey);
+        let address = public_key_to_btc_address(&pubkey).unwrap();
 
         // Re-derive checksum from the first 21 bytes
         let payload = &address[0..21];
@@ -176,7 +250,7 @@ mod tests {
     fn test_eth_address_length() {
         // Random 64-byte uncompressed public key (sans 0x04 prefix)
         let pubkey = [0xABu8; 64];
-        let address = public_key_to_eth_address(&pubkey);
+        let address = public_key_to_eth_address(&pubkey).unwrap();
         assert_eq!(address.len(), 20);
     }
 
@@ -190,23 +264,23 @@ mod tests {
         let hash = hasher.finalize();
         let expected = &hash[12..];
 
-        let address = public_key_to_eth_address(&pubkey);
+        let address = public_key_to_eth_address(&pubkey).unwrap();
         assert_eq!(address.as_slice(), expected);
     }
 
     #[test]
     fn test_eth_address_deterministic() {
         let pubkey = [0x42u8; 64];
-        let addr1 = public_key_to_eth_address(&pubkey);
-        let addr2 = public_key_to_eth_address(&pubkey);
+        let addr1 = public_key_to_eth_address(&pubkey).unwrap();
+        let addr2 = public_key_to_eth_address(&pubkey).unwrap();
         assert_eq!(addr1, addr2);
     }
 
     #[test]
-    #[should_panic(expected = "Public key should be 64 bytes")]
     fn test_eth_address_invalid_pubkey_length() {
         let short_key = vec![0u8; 63];
-        public_key_to_eth_address(&short_key);
+        let result = public_key_to_eth_address(&short_key);
+        assert!(result.is_err());
     }
 
     // ----------------------------------------------------------
@@ -347,7 +421,7 @@ mod tests {
                 .unwrap();
         assert_eq!(pubkey.len(), 33);
 
-        let address = public_key_to_btc_address(&pubkey);
+        let address = public_key_to_btc_address(&pubkey).unwrap();
         assert_eq!(address.len(), 25);
         assert_eq!(address[0], 0x00);
     }
@@ -361,32 +435,30 @@ mod tests {
             hex::decode("03a34b99f22c790c4e36b2b3c2c35a36db06226e41c692fc82b8b56ac1c540c5bd")
                 .unwrap();
 
-        let addr1 = public_key_to_btc_address(&pubkey1);
-        let addr2 = public_key_to_btc_address(&pubkey2);
+        let addr1 = public_key_to_btc_address(&pubkey1).unwrap();
+        let addr2 = public_key_to_btc_address(&pubkey2).unwrap();
         assert_ne!(addr1, addr2);
     }
 
     #[test]
-    #[should_panic(expected = "Public key should be 33 bytes")]
     fn test_btc_address_too_long_key() {
         let long_key = vec![0u8; 65];
-        public_key_to_btc_address(&long_key);
+        assert!(public_key_to_btc_address(&long_key).is_err());
     }
 
     #[test]
     fn test_eth_address_different_keys_produce_different_addresses() {
         let pubkey1 = [0x01u8; 64];
         let pubkey2 = [0x02u8; 64];
-        let addr1 = public_key_to_eth_address(&pubkey1);
-        let addr2 = public_key_to_eth_address(&pubkey2);
+        let addr1 = public_key_to_eth_address(&pubkey1).unwrap();
+        let addr2 = public_key_to_eth_address(&pubkey2).unwrap();
         assert_ne!(addr1, addr2);
     }
 
     #[test]
-    #[should_panic(expected = "Public key should be 64 bytes")]
     fn test_eth_address_too_long_key() {
         let long_key = vec![0u8; 65];
-        public_key_to_eth_address(&long_key);
+        assert!(public_key_to_eth_address(&long_key).is_err());
     }
 
     #[test]
