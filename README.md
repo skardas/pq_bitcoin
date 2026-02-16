@@ -345,7 +345,8 @@ graph TD
     end
 
     subgraph ONCHAIN["🔗 On-Chain"]
-        C1["PQBitcoin.sol — Migration verifier"]
+        C1["PQBitcoin.sol — Ownable2Step + Merkle registry"]
+        C2["MerkleTree.sol — Incremental tree (depth 20)"]
         IX["indexer/ — REST API"]
     end
 
@@ -381,8 +382,10 @@ pq_bitcoin/
 │       └── vkey.rs             # Print verification key
 │
 ├── contracts/                  # Solidity on-chain verifier (Ethereum path)
-│   ├── src/PQBitcoin.sol       # Migration verifier (12/12 tests, 100% coverage)
-│   └── test/PQBitcoin.t.sol    # Foundry tests (Groth16 + PLONK suites)
+│   ├── src/
+│   │   ├── PQBitcoin.sol       # Migration verifier + Ownable2Step + dual-sig
+│   │   └── MerkleTree.sol      # Incremental Merkle tree (depth 20, ~1M slots)
+│   └── test/PQBitcoin.t.sol    # Foundry tests (6 suites, 42 tests)
 │
 ├── indexer/                    # Migration indexer service
 │   └── src/main.rs             # REST API for scanning OP_RETURN migrations
@@ -676,15 +679,39 @@ sequenceDiagram
     User->>PQBitcoin: verifyMigrationProof(publicValues, proof)
     PQBitcoin->>Gateway: verifyProof(vkey, publicValues, proof)
     Gateway-->>PQBitcoin: ✅ Valid
-    PQBitcoin->>PQBitcoin: abi.decode(publicValues) → (addr, pk_pq)
+    PQBitcoin->>PQBitcoin: _validatePQKeySize(pq_pubkey.length)
     PQBitcoin->>Registry: Check !migrated[keccak256(addr)]
     PQBitcoin->>Registry: migrated[keccak256(addr)] = true
-    PQBitcoin-->>User: emit AddressMigrated(addr, pk_pq)
+    PQBitcoin->>Registry: Insert leaf into Merkle tree
+    PQBitcoin-->>User: emit AddressMigrated(addr, pk_pq, leafIndex, merkleRoot)
+```
+
+**Dual-signature migration flow:**
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant PQBitcoin as PQBitcoin.sol
+    participant Gateway as SP1VerifierGateway
+    participant Registry as Migration Registry
+
+    User->>PQBitcoin: verifyDualSigMigration(publicValues, proof, pqSignature)
+    PQBitcoin->>Gateway: verifyProof(vkey, publicValues, proof)
+    Gateway-->>PQBitcoin: ✅ ECDSA ownership verified
+    PQBitcoin->>PQBitcoin: _validatePQKeySize(pq_pubkey.length)
+    PQBitcoin->>PQBitcoin: sigHash = keccak256(pqSignature)
+    PQBitcoin->>Registry: Store pqSignatures[addrHash] = sigHash
+    PQBitcoin->>Registry: Insert leaf into Merkle tree
+    PQBitcoin-->>User: emit DualSigMigrated(addr, pk_pq, sigHash, leafIndex, root)
 ```
 
 **Security features:**
-- **Replay protection:** `mapping(bytes32 => bool) migrated` prevents double-migration
-- **Proof integrity:** SP1VerifierGateway validates the STARK-to-Groth16/PLONK wrapped proof
+- **Access control:** Ownable2Step — `updateVerifier()` / `updateVKey()` restricted to owner with 2-step transfer
+- **PQ key validation:** Rejects keys not matching ML-DSA-44 (1312B), ML-DSA-65 (1952B), or ML-DSA-87 (2592B)
+- **Replay protection:** `migrated` mapping prevents double-migration
+- **Proof integrity:** SP1VerifierGateway validates STARK-to-Groth16/PLONK wrapped proofs
+- **Dual-signature support:** ML-DSA signature hash committed on-chain for off-chain verification
+- **Merkle registry:** Incremental tree (depth 20, ~1M slots) for light-client-verifiable migration state
 - **View-only mode:** `verifyMigrationProofView()` for stateless verification without state changes
 
 ---
@@ -795,10 +822,10 @@ cargo test -p pq-bitcoin
 # ── Migration indexer tests (23 tests) ─────────────────────────
 cd indexer && cargo test && cd ..
 
-# ── Solidity contract tests (12 tests) ─────────────────────────
+# ── Solidity contract tests (42 tests) ─────────────────────────
 cd contracts && forge test -vvv
 
-# ── Run everything at once (136 Rust + 12 Solidity = 148) ──────
+# ── Run everything at once (136 Rust + 42 Solidity = 178) ──────
 cargo test -p pq-bitcoin && cd indexer && cargo test && cd ../contracts && forge test -vvv && cd ..
 ```
 
@@ -807,12 +834,12 @@ cargo test -p pq-bitcoin && cd indexer && cargo test && cd ../contracts && forge
 ## Test Coverage
 
 ```mermaid
-pie title Test Distribution (148 total)
+pie title Test Distribution (178 total)
     "Unit Tests" : 99
     "Integration Tests" : 12
     "Doctests" : 2
     "Indexer Tests" : 23
-    "Solidity Tests" : 12
+    "Solidity Tests" : 42
 ```
 
 ### Rust Library — 99 Unit Tests + 2 Doctests
@@ -864,15 +891,19 @@ pie title Test Distribution (148 total)
 | API | 8 | Health, list, scan (valid/invalid/duplicate/no-payload), stats, not-found |
 | **Total** | **23** | |
 
-### Solidity Contracts — 12 Tests (100% Coverage)
+### Solidity Contracts — 42 Tests
 
 | Suite | Tests | What's Covered |
 |-------|-------|----------------|
-| Groth16 | 8 | Valid proof, view-only, replay protection, isMigrated, event emission, invalid proof revert, multi-address migration, constructor state |
-| PLONK | 4 | Valid proof, view-only, replay protection, invalid proof revert |
-| **Total** | **12** | **100%** lines, statements, branches, functions |
+| Groth16 | 8 | Valid proof, view-only, replay, isMigrated, event, invalid proof, multi-address, constructor |
+| PLONK | 4 | Valid proof, view-only, replay, invalid proof |
+| Access Control | 11 | Owner ops, unauthorized reverts, 2-step transfer, verifier/vkey update events |
+| Key Validation | 8 | ML-DSA-44/65/87 accept, invalid (0/100/1500/1953 bytes) reject, view mode reject |
+| Dual-Sig | 6 | Sig hash stored, event, replay, empty sig reject, invalid key, no-sig check |
+| Merkle Tree | 5 | Initial state, root updates, multi-insert, dual-sig tree, leaf index events |
+| **Total** | **42** | |
 
-### Grand Total: 148 Tests
+### Grand Total: 178 Tests
 
 | Suite | Count |
 |-------|-------|
@@ -880,8 +911,8 @@ pie title Test Distribution (148 total)
 | Rust Doctests | 2 |
 | Rust Integration Tests | 12 |
 | Indexer Tests | 23 |
-| Solidity Tests | 12 |
-| **Total** | **148** |
+| Solidity Tests | 42 |
+| **Total** | **178** |
 
 ---
 
