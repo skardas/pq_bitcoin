@@ -1,4 +1,4 @@
-# PQ Bitcoin — Post-Quantum Address Migration with ZK-STARKs
+# PQ Bitcoin — Migrating Bitcoin and Ethereum Addresses to the Quantum Blockchain Era
 
 A **post-quantum Bitcoin and Ethereum address migration framework** built on SP1 zkVM, implementing the research paper *"Quantum-Resistant Framework for Bitcoin and Ethereum Using Post-Quantum Signatures and STARK Circuits"*.
 
@@ -237,8 +237,10 @@ The SP1 prover uses the **FRI (Fast Reed-Solomon Interactive Oracle Proof)** pro
 
 ```
 pq_bitcoin/
-├── lib/                        # Shared library (address derivation, PQ validation)
-│   └── src/lib.rs              # BTC/ETH derivation, ML-DSA constants, 28 unit tests
+├── lib/                        # Shared library
+│   └── src/
+│       ├── lib.rs              # BTC/ETH derivation, ML-DSA constants, 28 unit tests
+│       └── op_return.rs        # OP_RETURN payload format, script gen/parse, 32 tests
 │
 ├── program/                    # BTC zkVM circuit (SP1 guest)
 │   └── src/main.rs             # ECDSA verify + P2PKH derive + PQ validate
@@ -250,32 +252,42 @@ pq_bitcoin/
 │   └── src/bin/
 │       ├── main.rs             # Key gen (secp256k1 + ML-DSA-65), execute/prove
 │       ├── evm.rs              # EVM proof generation + fixture JSON output
+│       ├── btc_migrate.rs      # OP_RETURN migration payload generator
 │       └── vkey.rs             # Print verification key
 │
-├── contracts/                  # Solidity on-chain verifier
+├── contracts/                  # Solidity on-chain verifier (Ethereum path)
 │   ├── src/PQBitcoin.sol       # Migration verifier (12/12 tests, 100% coverage)
 │   └── test/PQBitcoin.t.sol    # Foundry tests (Groth16 + PLONK suites)
 │
 └── docs/                       # Research paper (PDF)
 ```
 
-### Component Interaction
+### Dual Verification Paths
 
 ```mermaid
 graph TD
-    LIB["lib/<br/>• public_key_to_btc_address()<br/>• public_key_to_eth_address()<br/>• validate_pq_pubkey()<br/>• ml_dsa_level_name()<br/>• PublicValuesStruct"]
+    subgraph "Key Generation"
+        A["secp256k1 + ML-DSA-65<br/>key generation"]
+    end
 
-    BTC["program/<br/>BTC STARK Circuit"]
-    ETH["eth_program/<br/>ETH STARK Circuit"]
-    SCRIPT["script/<br/>Host Orchestration"]
-    CONTRACT["contracts/<br/>PQBitcoin.sol"]
+    subgraph "SP1 zkVM"
+        A --> B["BTC Circuit<br/>program/"]
+        A --> C["ETH Circuit<br/>eth_program/"]
+    end
 
-    LIB --> BTC
-    LIB --> ETH
-    LIB --> SCRIPT
-    SCRIPT --> BTC
-    SCRIPT --> ETH
-    SCRIPT -->|"fixture JSON"| CONTRACT
+    subgraph "Bitcoin Path"
+        B --> D["btc_migrate.rs"]
+        D --> E["OP_RETURN TX<br/>'PQMG' + SHA-256 hashes"]
+        E --> F["Bitcoin Network"]
+        F --> G["Migration Indexer<br/>scans for PQMG"]
+    end
+
+    subgraph "Ethereum Path"
+        B --> H["evm.rs"]
+        C --> H
+        H --> I["Groth16 / PLONK<br/>wrapped proof"]
+        I --> J["PQBitcoin.sol<br/>on-chain registry"]
+    end
 ```
 
 ---
@@ -400,10 +412,18 @@ cargo run --release --bin evm -- --system groth16
 cargo run --release --bin evm -- --system plonk
 ```
 
-### 4. Run All Tests
+### 4. Generate OP_RETURN Migration Payload (Bitcoin Path)
 
 ```sh
-# ── Rust library tests (28 tests) ──────────────────────────────
+cd script
+cargo run --release --bin btc_migrate              # random keys
+cargo run --release --bin btc_migrate -- --format hex # raw script hex
+```
+
+### 5. Run All Tests
+
+```sh
+# ── Rust library tests (62 tests) ──────────────────────────────
 cargo test --package pq_bitcoin-lib
 
 # ── Solidity contract tests (12 tests) ─────────────────────────
@@ -423,19 +443,23 @@ cargo test --package pq_bitcoin-lib && cd contracts && forge test -vvv && cd ..
 
 ## Test Coverage
 
-### Rust Library — 28 Tests (99.53% Line Coverage)
+### Rust Library — 62 Tests
 
 | Category | Tests | What's Covered |
 |----------|-------|----------------|
-| BTC Address | 6 | Valid derivation, determinism, invalid/too-long keys, checksum integrity, 0x03 prefix, uniqueness |
-| ETH Address | 5 | Length (20B), known Keccak vector, determinism, invalid/too-long keys, uniqueness |
+| BTC Address | 6 | Valid derivation, determinism, invalid/too-long keys, checksum, 0x03 prefix, uniqueness |
+| ETH Address | 5 | Length, known Keccak vector, determinism, invalid/too-long keys, uniqueness |
 | PQ Validation | 7 | ML-DSA-44/65/87 valid, invalid/empty, boundary sizes (±1 byte each) |
 | Level Names | 4 | ML-DSA-44/65/87 names, unknown size |
 | ABI Encoding | 4 | Roundtrip, empty fields, large key (2592B), SolValue trait |
 | Constants | 1 | ML_DSA_65_PK_SIZE, ML_DSA_65_SIG_SIZE, min/max sizes |
-| **Total** | **28** | |
-
-> The 0.47% uncovered is the closing `}` of the `sol!{}` proc-macro — auto-generated code, not user logic.
+| OP_RETURN Encode/Decode | 8 | Roundtrip, size within 80B, magic/version, wrong magic/version, too short, empty |
+| Hash Commitments | 4 | Valid/invalid PQ key hash, valid/invalid proof hash |
+| ML-DSA Level Detection | 4 | Auto-detect 44/65/87 from key size, unknown |
+| Flags | 6 | Groth16, PLONK, dual-sig, combined, none, preserved through encode/decode |
+| Script Gen/Parse | 7 | to_script, is_migration_script (valid, non-OP_RETURN, wrong magic, empty), from_script roundtrip, invalid, direct push |
+| Constructors & Determinism | 3 | from_hashes, deterministic encoding, different keys/proofs |
+| **Total** | **62** | |
 
 ### Solidity Contracts — 12 Tests (100% Coverage)
 
