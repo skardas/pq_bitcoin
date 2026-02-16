@@ -293,6 +293,171 @@ graph TD
 
 ---
 
+## Bitcoin On-Chain Registry
+
+Bitcoin has **no smart contracts**, so we cannot deploy a registry like Ethereum's `PQBitcoin.sol`. This project implements four complementary strategies, each providing different trade-offs:
+
+### Phase 1: OP_RETURN Commitments (`op_return.rs`)
+
+Bitcoin allows embedding **up to 80 bytes** of arbitrary data using `OP_RETURN`. We use this to commit SHA-256 hashes of the PQ key and STARK proof on-chain.
+
+**Payload format (71 bytes):**
+
+```
+┌──────────┬────────┬──────────────────────┬──────────────────────┬───────┬─────────┐
+│ Magic(4) │ Ver(1) │ PQ Key Hash (32)     │ Proof Hash (32)      │Flg(1) │Level(1) │
+│ "PQMG"   │ 0x01   │ SHA-256(pk_pq)       │ SHA-256(π_STARK)     │       │         │
+└──────────┴────────┴──────────────────────┴──────────────────────┘───────┴─────────┘
+```
+
+**Why hashes?** The full ML-DSA-65 public key is 1,952 bytes — far exceeding OP_RETURN's 80-byte limit. We commit to the hash on-chain and publish the full key off-chain (IPFS, website, etc.).
+
+**Verification:**
+
+$$
+\text{Valid} \iff \text{SHA-256}(pk_{pq}^{\text{claimed}}) = H_{\text{committed}} \land \text{SHA-256}(\pi^{\text{claimed}}) = P_{\text{committed}}
+$$
+
+Anyone can verify by fetching the off-chain PQ key and checking the hash matches the on-chain commitment.
+
+**Flags byte:** encodes proof type (Groth16 `0x01`, PLONK `0x02`) and migration mode (dual-sig `0x04`).
+
+**Generate a payload:**
+```sh
+cd script && cargo run --release --bin btc_migrate
+```
+
+---
+
+### Phase 2: Taproot Script Path (`taproot.rs`)
+
+Bitcoin Taproot (BIP-341) allows hiding spending conditions in a Merkle tree of scripts. We commit the PQ key hash directly into the **UTXO itself** — not as data, but as a spending condition.
+
+**Script tree structure:**
+
+```
+                    ┌─────────────────────┐
+                    │   P_tweaked          │
+                    │ = P + t·G            │
+                    └──────────┬──────────┘
+                               │
+                     ┌─────────┴─────────┐
+                     │    TapBranch       │
+                     │  (Merkle root)     │
+                     ├───────────────────┤
+            ┌────────┘                    └────────┐
+     ┌──────┴──────┐                    ┌──────────┴──────────┐
+     │   Leaf 0    │                    │      Leaf 1         │
+     │ PQ Commit   │                    │  Timelock Fallback  │
+     │             │                    │                     │
+     │ OP_SHA256   │                    │ <blocks>            │
+     │ <pk_hash>   │                    │ OP_CSV              │
+     │ OP_EQUAL    │                    │ OP_DROP             │
+     │ VERIFY      │                    │ OP_TRUE             │
+     │ OP_TRUE     │                    │                     │
+     └─────────────┘                    └─────────────────────┘
+```
+
+**How it works mathematically:**
+
+1. **TapLeaf:** Each script leaf is hashed with domain separation:
+
+$$
+H_{\text{leaf}}^{(i)} = \text{TaggedHash}(\texttt{"TapLeaf"}, \; v \| \text{len}(s_i) \| s_i)
+$$
+
+where $v = \texttt{0xc0}$ (Tapscript version) and $s_i$ is the leaf script.
+
+2. **TapBranch:** Children are sorted lexicographically before hashing:
+
+$$
+H_{\text{branch}} = \text{TaggedHash}(\texttt{"TapBranch"}, \; \text{sort}(H_L, H_R))
+$$
+
+3. **TapTweak:** The Merkle root is combined with the internal key:
+
+$$
+t = \text{TaggedHash}(\texttt{"TapTweak"}, \; P_{\text{internal}} \| H_{\text{root}})
+$$
+
+4. **Tweaked key:** The output key commits to the entire script tree:
+
+$$
+Q = P_{\text{internal}} + t \cdot G
+$$
+
+**Spending via the PQ leaf** requires providing:
+- The PQ public key (pre-image of the committed hash)
+- A control block (internal key + Merkle sibling proof)
+
+The **timelock fallback** (Leaf 1) allows recovery if migration doesn't happen within $N$ blocks.
+
+---
+
+### Phase 3: Bitcoin L2 Deployment
+
+EVM-compatible Bitcoin L2s allow deploying `PQBitcoin.sol` with **zero code changes**:
+
+| L2 | Consensus | Settlement | Contract |
+|----|-----------|------------|----------|
+| **BOB** | OP Stack | Bitcoin + Ethereum | `PQBitcoin.sol` as-is |
+| **Citrea** | ZK Rollup | Bitcoin (BitVM2) | `PQBitcoin.sol` as-is |
+| **Botanix** | Spiderchain | Bitcoin PoS | `PQBitcoin.sol` as-is |
+
+Deploy with one command:
+```sh
+cd contracts
+make deploy-bob          # BOB mainnet
+make deploy-citrea       # Citrea testnet
+make deploy-botanix      # Botanix testnet
+```
+
+The L2 approach provides a **full smart contract registry** (replay protection, event emission, query) while inheriting Bitcoin's security through the L2's settlement mechanism.
+
+---
+
+### Phase 5: Soft Fork — `OP_CHECKQUANTUMSIG` (BIP Draft)
+
+The ultimate solution: native Bitcoin opcodes for PQ cryptography. See the full specification in [`docs/BIP-CHECKQUANTUMSIG.md`](docs/BIP-CHECKQUANTUMSIG.md).
+
+**Two new opcodes:**
+
+| Opcode | Hex | Function |
+|--------|-----|----------|
+| `OP_CHECKQUANTUMSIG` | `0xbb` | Verify ML-DSA signature natively in script |
+| `OP_CHECKSTARKPROOF` | `0xbc` | Verify STARK proof (address → PQ key binding) |
+
+**`OP_CHECKQUANTUMSIG` stack:**
+```
+<sig>       ML-DSA signature
+<pubkey>    ML-DSA public key
+<msg>       32-byte message hash
+──── OP_CHECKQUANTUMSIG ────
+<result>    1 if valid, 0 if invalid
+```
+
+**Migration script with native verification:**
+```
+<btc_address> <pq_pubkey> <vkey> OP_CHECKSTARKPROOF OP_VERIFY
+```
+
+This requires a Bitcoin soft fork (BIP-9 version bits), which is a multi-year consensus process. The BIP draft is included in this repository as a reference for future standardization.
+
+---
+
+### Strategy Comparison
+
+| | OP_RETURN | Taproot | Bitcoin L2 | Soft Fork |
+|---|:-:|:-:|:-:|:-:|
+| **Works today** | ✅ | ✅ | ✅ | ❌ |
+| **Consensus enforced** | ❌ | Partial | L2 only | ✅ |
+| **On Bitcoin L1** | ✅ | ✅ | ❌ | ✅ |
+| **Full registry** | Indexer | ❌ | ✅ | ✅ |
+| **PQ sig verify** | ❌ | ❌ | EVM | ✅ |
+| **Cost per migration** | ~$2 | ~$1 | ~$0.10 | ~$1 |
+
+---
+
 ## Post-Quantum Cryptography: ML-DSA
 
 ### Algorithm Overview
