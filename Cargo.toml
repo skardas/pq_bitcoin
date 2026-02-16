@@ -1,5 +1,6 @@
 [workspace]
 members = ["lib", "program", "eth_program", "script"]
+exclude = ["indexer"]
 resolver = "2"
 
 [workspace.dependencies]

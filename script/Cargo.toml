@@ -20,6 +20,10 @@ path = "src/bin/vkey.rs"
 name = "btc_migrate"
 path = "src/bin/btc_migrate.rs"
 
+[[bin]]
+name = "taproot_addr"
+path = "src/bin/taproot_addr.rs"
+
 [dependencies]
 sp1-sdk = { workspace = true }
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }

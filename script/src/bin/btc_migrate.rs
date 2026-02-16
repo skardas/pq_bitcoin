@@ -41,7 +41,10 @@ fn main() {
         }
         None => {
             let mut rng = OsRng;
-            SecretKey::new(&mut rng)
+            let mut key_bytes = [0u8; 32];
+            use rand::TryRngCore;
+            rng.try_fill_bytes(&mut key_bytes).expect("Random key generation failed");
+            SecretKey::from_slice(&key_bytes).expect("Invalid random key")
         }
     };
     let public_key = secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
