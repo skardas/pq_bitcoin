@@ -240,7 +240,8 @@ pq_bitcoin/
 ├── lib/                        # Shared library
 │   └── src/
 │       ├── lib.rs              # BTC/ETH derivation, ML-DSA constants, 28 unit tests
-│       └── op_return.rs        # OP_RETURN payload format, script gen/parse, 32 tests
+│       ├── op_return.rs        # OP_RETURN payload format, script gen/parse, 32 tests
+│       └── taproot.rs          # BIP-341 Taproot PQ commitment tree, 35 tests
 │
 ├── program/                    # BTC zkVM circuit (SP1 guest)
 │   └── src/main.rs             # ECDSA verify + P2PKH derive + PQ validate
@@ -423,7 +424,7 @@ cargo run --release --bin btc_migrate -- --format hex # raw script hex
 ### 5. Run All Tests
 
 ```sh
-# ── Rust library tests (62 tests) ──────────────────────────────
+# ── Rust library tests (99 tests) ──────────────────────────────
 cargo test --package pq_bitcoin-lib
 
 # ── Solidity contract tests (12 tests) ─────────────────────────
@@ -459,7 +460,17 @@ cargo test --package pq_bitcoin-lib && cd contracts && forge test -vvv && cd ..
 | Flags | 6 | Groth16, PLONK, dual-sig, combined, none, preserved through encode/decode |
 | Script Gen/Parse | 7 | to_script, is_migration_script (valid, non-OP_RETURN, wrong magic, empty), from_script roundtrip, invalid, direct push |
 | Constructors & Determinism | 3 | from_hashes, deterministic encoding, different keys/proofs |
-| **Total** | **62** | |
+| **Taproot Tagged Hash** | **4** | Deterministic, domain separation (different tags), different data, length |
+| **Compact Size** | **4** | Small (1B), medium (253+), large (254+), zero |
+| **PQ Script** | **2** | Correct opcodes, different hashes produce different scripts |
+| **Timelock Script** | **3** | Small (OP_1..16), medium (1B push), large (2B push) |
+| **Checksig Script** | **1** | x-only pubkey + OP_CHECKSIG structure |
+| **TapLeaf/TapBranch** | **5** | Deterministic, different scripts, hash length, branch commutativity, different children |
+| **TapTweak** | **4** | With/without Merkle root, differ, different keys |
+| **PQ Migration Tree** | **7** | Build, different keys, different timelocks, verify commitment (valid/invalid), tweak hash |
+| **Control Blocks** | **4** | PQ leaf structure, parity bit, timelock leaf structure, different siblings |
+| **Edge Cases** | **3** | ML-DSA-44 key, ML-DSA-87 key, timelock boundaries (16/128) |
+| **Total** | **99** | |
 
 ### Solidity Contracts — 12 Tests (100% Coverage)
 

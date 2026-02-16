@@ -1,4 +1,5 @@
 pub mod op_return;
+pub mod taproot;
 
 use alloy_sol_types::sol;
 use sha3::{Digest, Keccak256};
