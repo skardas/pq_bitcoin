@@ -4,4 +4,18 @@ out = "out"
 libs = ["lib"]
 fs_permissions = [{ access = "read-write", path = "./" }]
 
-# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+# ── Network RPC Endpoints ───────────────────────────────────────
+# All values loaded from .env file via Makefile or --rpc-url flag.
+
+[rpc_endpoints]
+ethereum = "${ETHEREUM_RPC_URL}"
+sepolia = "${SEPOLIA_RPC_URL}"
+bob = "${BOB_RPC_URL}"
+bob_testnet = "${BOB_SEPOLIA_RPC_URL}"
+citrea = "${CITREA_TESTNET_RPC_URL}"
+botanix = "${BOTANIX_RPC_URL}"
+
+[etherscan]
+ethereum = { key = "${ETHERSCAN_API_KEY}" }
+sepolia = { key = "${ETHERSCAN_API_KEY}" }
+bob = { key = "${ETHERSCAN_API_KEY}", url = "https://explorer.gobob.xyz/api" }
