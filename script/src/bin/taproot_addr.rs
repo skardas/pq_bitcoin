@@ -5,11 +5,11 @@
 //! computes the tweaked key, and outputs the bech32m (P2TR) address.
 
 use clap::Parser;
-use hex;
-use hashes::{sha256, Hash};
+use hashes::{Hash, sha256};
+use secp256k1::{Parity, PublicKey, Scalar, Secp256k1, XOnlyPublicKey};
 
 use pq_bitcoin_lib::taproot::{PQMigrationTree, tap_tweak_hash};
-use pq_bitcoin_lib::{validate_pq_pubkey, ml_dsa_level_name};
+use pq_bitcoin_lib::{ml_dsa_level_name, validate_pq_pubkey};
 
 #[derive(Parser)]
 #[command(name = "taproot-addr")]
@@ -41,14 +41,12 @@ const BECH32M_CONST: u32 = 0x2bc830a3;
 const CHARSET: &[u8] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 
 fn bech32_polymod(values: &[u32]) -> u32 {
-    let gen: [u32; 5] = [
-        0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3,
-    ];
+    let generator: [u32; 5] = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
     let mut chk: u32 = 1;
     for &v in values {
         let b = chk >> 25;
         chk = ((chk & 0x1ffffff) << 5) ^ v;
-        for (i, &g) in gen.iter().enumerate() {
+        for (i, &g) in generator.iter().enumerate() {
             if (b >> i) & 1 != 0 {
                 chk ^= g;
             }
@@ -151,9 +149,14 @@ fn main() {
 
     assert!(
         validate_pq_pubkey(&pq_pubkey),
-        "Invalid PQ key size: {} bytes", pq_pubkey.len()
+        "Invalid PQ key size: {} bytes",
+        pq_pubkey.len()
     );
-    println!("PQ Key Type:       {} ({} bytes)", ml_dsa_level_name(&pq_pubkey), pq_pubkey.len());
+    println!(
+        "PQ Key Type:       {} ({} bytes)",
+        ml_dsa_level_name(&pq_pubkey),
+        pq_pubkey.len()
+    );
     println!("Timelock:          {} blocks", args.timelock);
 
     // ── 3. Build Taproot script tree ───────────────────────────
@@ -162,18 +165,27 @@ fn main() {
     println!("\n── Script Tree ─────────────────────────────────────");
     println!("PQ Pubkey Hash:    {}", hex::encode(tree.pq_pubkey_hash));
     println!("PQ Leaf Hash:      {}", hex::encode(tree.pq_leaf_hash));
-    println!("Timelock Leaf:     {}", hex::encode(tree.timelock_leaf_hash));
+    println!(
+        "Timelock Leaf:     {}",
+        hex::encode(tree.timelock_leaf_hash)
+    );
     println!("Merkle Root:       {}", hex::encode(tree.merkle_root));
 
-    // ── 4. Compute tweaked key ─────────────────────────────────
-    let tweak = tap_tweak_hash(&internal_key, Some(&tree.merkle_root));
-    println!("Tweak Hash:        {}", hex::encode(tweak));
+    // ── 4. Compute tweaked key (proper EC point addition) ─────
+    let tweak_hash = tap_tweak_hash(&internal_key, Some(&tree.merkle_root));
+    println!("Tweak Hash:        {}", hex::encode(tweak_hash));
 
-    // Q = P + t·G  (we only compute the x-coordinate for the address)
-    // In a real implementation, this would use secp256k1 point addition.
-    // For the address, we use the tweaked hash as the output key directly
-    // (this is a simplification — production code would use proper EC math).
-    let output_key = tweak; // Simplified: treat tweak as the output key x-coord
+    // Q = P_internal + t·G  (BIP-341 key tweaking)
+    let secp = Secp256k1::new();
+    let internal_xonly =
+        XOnlyPublicKey::from_slice(&internal_key).expect("Invalid x-only internal key");
+    let internal_pk = PublicKey::from_x_only_public_key(internal_xonly, Parity::Even);
+    let tweak_scalar = Scalar::from_be_bytes(tweak_hash).expect("Tweak hash out of range");
+    let tweaked_pk = internal_pk
+        .add_exp_tweak(&secp, &tweak_scalar)
+        .expect("Tweaked key computation failed");
+    let (output_xonly, parity) = tweaked_pk.x_only_public_key();
+    let output_key = output_xonly.serialize();
 
     // ── 5. Generate bech32m P2TR address ───────────────────────
     let hrp = match args.network.as_str() {
@@ -185,11 +197,16 @@ fn main() {
     println!("\n── Taproot Address ─────────────────────────────────");
     println!("Network:           {}", args.network);
     println!("Output Key:        {}", hex::encode(output_key));
+    println!("Output Parity:     {:?}", parity);
     println!("P2TR Address:      {}", address);
 
     // ── 6. Control block info ──────────────────────────────────
-    let pq_cb = tree.pq_leaf_control_block(&internal_key, 0);
-    let tl_cb = tree.timelock_leaf_control_block(&internal_key, 0);
+    let parity_byte = match parity {
+        Parity::Even => 0u8,
+        Parity::Odd => 1u8,
+    };
+    let pq_cb = tree.pq_leaf_control_block(&internal_key, parity_byte);
+    let tl_cb = tree.timelock_leaf_control_block(&internal_key, parity_byte);
 
     println!("\n── Spending Info ───────────────────────────────────");
     println!("PQ Script (hex):   {}", hex::encode(&tree.pq_script));
@@ -201,7 +218,10 @@ fn main() {
     println!("1. Send BTC to the P2TR address above");
     println!("2. To migrate: spend via script path with your PQ public key");
     println!("   (provide PQ key pre-image + control block)");
-    println!("3. Fallback: after {} blocks, anyone can spend via timelock leaf", args.timelock);
+    println!(
+        "3. Fallback: after {} blocks, anyone can spend via timelock leaf",
+        args.timelock
+    );
 
     // ── JSON output ────────────────────────────────────────────
     println!("\n── JSON Output ─────────────────────────────────────");
@@ -210,13 +230,25 @@ fn main() {
     println!("  \"network\": \"{}\",", args.network);
     println!("  \"internal_key\": \"0x{}\",", hex::encode(internal_key));
     println!("  \"output_key\": \"0x{}\",", hex::encode(output_key));
-    println!("  \"merkle_root\": \"0x{}\",", hex::encode(tree.merkle_root));
-    println!("  \"pq_pubkey_hash\": \"0x{}\",", hex::encode(tree.pq_pubkey_hash));
+    println!(
+        "  \"merkle_root\": \"0x{}\",",
+        hex::encode(tree.merkle_root)
+    );
+    println!(
+        "  \"pq_pubkey_hash\": \"0x{}\",",
+        hex::encode(tree.pq_pubkey_hash)
+    );
     println!("  \"ml_dsa_level\": \"{}\",", ml_dsa_level_name(&pq_pubkey));
     println!("  \"timelock_blocks\": {},", args.timelock);
     println!("  \"pq_script\": \"0x{}\",", hex::encode(&tree.pq_script));
     println!("  \"pq_control_block\": \"0x{}\",", hex::encode(&pq_cb));
-    println!("  \"timelock_script\": \"0x{}\",", hex::encode(&tree.timelock_script));
-    println!("  \"timelock_control_block\": \"0x{}\"", hex::encode(&tl_cb));
+    println!(
+        "  \"timelock_script\": \"0x{}\",",
+        hex::encode(&tree.timelock_script)
+    );
+    println!(
+        "  \"timelock_control_block\": \"0x{}\"",
+        hex::encode(&tl_cb)
+    );
     println!("}}");
 }

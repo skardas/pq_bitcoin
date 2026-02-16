@@ -1,4 +1,4 @@
-use sp1_sdk::{HashableKey, ProverClient, include_elf};
+use sp1_sdk::{HashableKey, Prover, ProverClient, include_elf};
 
 /// The ELF (executable and linkable format) file for the Succinct RISC-V zkVM.
 pub const PQ_BITCOIN_ELF: &[u8] = include_elf!("pq_bitcoin-program");

@@ -1,9 +1,7 @@
 use clap::Parser;
-use hex;
-use ml_dsa::ml_dsa_65;
+use ml_dsa::{KeyGen, MlDsa65, Seed};
 use rand::rngs::OsRng;
 use secp256k1::{Secp256k1, SecretKey};
-use signature::Signer;
 
 use pq_bitcoin_lib::op_return::{FLAG_GROTH16, MigrationPayload, PAYLOAD_SIZE};
 use pq_bitcoin_lib::{ml_dsa_level_name, public_key_to_btc_address, validate_pq_pubkey};
@@ -62,10 +60,13 @@ fn main() {
     let pq_public_key_bytes = match &args.pq_pubkey {
         Some(hex_key) => hex::decode(hex_key).expect("Invalid hex PQ public key"),
         None => {
-            let mut rng = OsRng;
-            let pq_signing_key = ml_dsa_65::SigningKey::generate(&mut rng);
-            let pq_verifying_key = pq_signing_key.verifying_key();
-            pq_verifying_key.as_ref().to_vec()
+            let mut pq_seed = Seed::default();
+            use rand::TryRngCore;
+            OsRng
+                .try_fill_bytes(&mut pq_seed)
+                .expect("PQ seed generation failed");
+            let kp = MlDsa65::from_seed(&pq_seed);
+            kp.verifying_key().encode().to_vec()
         }
     };
 
@@ -98,11 +99,8 @@ fn main() {
     );
     println!("Magic:             PQMG");
     println!("Version:           0x01");
-    println!(
-        "PQ Key Hash:       {}",
-        hex::encode(&payload.pq_pubkey_hash)
-    );
-    println!("Proof Hash:        {}", hex::encode(&payload.proof_hash));
+    println!("PQ Key Hash:       {}", hex::encode(payload.pq_pubkey_hash));
+    println!("Proof Hash:        {}", hex::encode(payload.proof_hash));
     println!(
         "Flags:             0x{:02x} (groth16={})",
         payload.flags,
@@ -122,20 +120,20 @@ fn main() {
         "hex" => {
             println!("{}", hex::encode(&script));
         }
-        "json" | _ => {
+        _ => {
             println!("── Output ──────────────────────────────────────────");
             println!("{{");
             println!("  \"btc_address\": \"0x{}\",", hex::encode(&btc_address));
             println!(
                 "  \"pq_pubkey_hash\": \"0x{}\",",
-                hex::encode(&payload.pq_pubkey_hash)
+                hex::encode(payload.pq_pubkey_hash)
             );
             println!(
                 "  \"proof_hash\": \"0x{}\",",
-                hex::encode(&payload.proof_hash)
+                hex::encode(payload.proof_hash)
             );
             println!("  \"op_return_script\": \"0x{}\",", hex::encode(&script));
-            println!("  \"op_return_payload\": \"0x{}\",", hex::encode(&encoded));
+            println!("  \"op_return_payload\": \"0x{}\",", hex::encode(encoded));
             println!("  \"ml_dsa_level\": \"{}\",", payload.level_name());
             println!("  \"flags\": \"0x{:02x}\"", payload.flags);
             println!("}}");

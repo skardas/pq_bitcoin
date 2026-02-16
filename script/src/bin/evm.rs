@@ -25,8 +25,8 @@ use sp1_sdk::{
 use std::path::PathBuf;
 
 // ML-DSA imports
-use ml_dsa::ml_dsa_65;
-use signature::Signer;
+use ml_dsa::signature::Signer;
+use ml_dsa::{KeyGen, MlDsa65, Seed};
 
 /// The ELF (executable and linkable format) file for the Succinct RISC-V zkVM.
 pub const PQ_BITCOIN_ELF: &[u8] = include_elf!("pq_bitcoin-program");
@@ -99,10 +99,14 @@ fn main() {
     println!("BTC Address (hex): {}", hex::encode(&address));
 
     // ── 2. Generate ML-DSA-65 post-quantum keypair ─────────────
-    let mut rng = OsRng;
-    let pq_signing_key = ml_dsa_65::SigningKey::generate(&mut rng);
-    let pq_verifying_key = pq_signing_key.verifying_key();
-    let pq_public_key_bytes = pq_verifying_key.as_ref().to_vec();
+    let mut pq_seed = Seed::default();
+    OsRng
+        .try_fill_bytes(&mut pq_seed)
+        .expect("cannot fill random bytes for PQ seed");
+    let kp = MlDsa65::from_seed(&pq_seed);
+    let pq_signing_key = kp.signing_key().clone();
+    let pq_verifying_key = kp.verifying_key().clone();
+    let pq_public_key_bytes = pq_verifying_key.encode().to_vec();
 
     assert!(
         validate_pq_pubkey(&pq_public_key_bytes),

@@ -22,8 +22,8 @@ use sp1_sdk::{HashableKey, ProverClient, SP1Stdin, include_elf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // ML-DSA imports
-use ml_dsa::ml_dsa_65;
-use signature::Signer;
+use ml_dsa::signature::Signer;
+use ml_dsa::{KeyGen, MlDsa65, Seed};
 
 #[derive(ValueEnum, Clone, Debug)]
 enum ProveType {
@@ -88,10 +88,14 @@ fn main() {
     println!("ECDSA Public Key:  {}", hex::encode(serialized_pub_key));
 
     // ── 2. Generate ML-DSA-65 post-quantum keypair ─────────────
-    let mut rng = OsRng;
-    let pq_signing_key = ml_dsa_65::SigningKey::generate(&mut rng);
-    let pq_verifying_key = pq_signing_key.verifying_key();
-    let pq_public_key_bytes = pq_verifying_key.as_ref().to_vec();
+    let mut seed = Seed::default();
+    OsRng
+        .try_fill_bytes(&mut seed)
+        .expect("cannot fill random bytes for PQ seed");
+    let kp = MlDsa65::from_seed(&seed);
+    let pq_signing_key = kp.signing_key().clone();
+    let pq_verifying_key = kp.verifying_key().clone();
+    let pq_public_key_bytes = pq_verifying_key.encode().to_vec();
 
     // Validate the PQ public key format
     assert!(
@@ -108,7 +112,7 @@ fn main() {
 
     // Optionally sign Something with the PQ key to prove it works
     let pq_sig = pq_signing_key.sign(&address);
-    println!("PQ Signature Size: {} bytes", pq_sig.as_ref().len());
+    println!("PQ Signature Size: {} bytes", pq_sig.encode().len());
 
     // ── 3. Feed inputs to SP1 zkVM ─────────────────────────────
     stdin.write(&serialized_pub_key.to_vec());
