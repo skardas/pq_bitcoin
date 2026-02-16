@@ -11,14 +11,16 @@
 
 use alloy_sol_types::SolType;
 use clap::{Parser, ValueEnum};
-use hashes::{sha256, Hash};
-use pq_bitcoin_lib::{public_key_to_btc_address, validate_pq_pubkey, ml_dsa_level_name, PublicValuesStruct};
-use rand::rngs::OsRng;
+use hashes::{Hash, sha256};
+use pq_bitcoin_lib::{
+    PublicValuesStruct, ml_dsa_level_name, public_key_to_btc_address, validate_pq_pubkey,
+};
 use rand::TryRngCore;
-use secp256k1::{ecdsa, Error, Message, PublicKey, Secp256k1, SecretKey, Signing};
+use rand::rngs::OsRng;
+use secp256k1::{Error, Message, PublicKey, Secp256k1, SecretKey, Signing, ecdsa};
 use serde::{Deserialize, Serialize};
 use sp1_sdk::{
-    include_elf, HashableKey, ProverClient, SP1ProofWithPublicValues, SP1Stdin, SP1VerifyingKey,
+    HashableKey, ProverClient, SP1ProofWithPublicValues, SP1Stdin, SP1VerifyingKey, include_elf,
 };
 use std::path::PathBuf;
 
@@ -102,9 +104,16 @@ fn main() {
     let pq_verifying_key = pq_signing_key.verifying_key();
     let pq_public_key_bytes = pq_verifying_key.as_ref().to_vec();
 
-    assert!(validate_pq_pubkey(&pq_public_key_bytes),
-        "Generated PQ public key has invalid size: {}", pq_public_key_bytes.len());
-    println!("PQ Key Type: {} ({} bytes)", ml_dsa_level_name(&pq_public_key_bytes), pq_public_key_bytes.len());
+    assert!(
+        validate_pq_pubkey(&pq_public_key_bytes),
+        "Generated PQ public key has invalid size: {}",
+        pq_public_key_bytes.len()
+    );
+    println!(
+        "PQ Key Type: {} ({} bytes)",
+        ml_dsa_level_name(&pq_public_key_bytes),
+        pq_public_key_bytes.len()
+    );
 
     // Sign the address with PQ key to demonstrate it works
     let _pq_sig = pq_signing_key.sign(&address);
@@ -136,8 +145,10 @@ fn create_proof_fixture(
 ) {
     // Deserialize the public values.
     let bytes = proof.public_values.as_slice();
-    let PublicValuesStruct { btc_address, pq_pubkey } =
-        PublicValuesStruct::abi_decode(bytes).unwrap();
+    let PublicValuesStruct {
+        btc_address,
+        pq_pubkey,
+    } = PublicValuesStruct::abi_decode(bytes).unwrap();
 
     // Create the testing fixture so we can test things end-to-end.
     let fixture = SP1PQBitcoinProofFixture {
@@ -163,5 +174,8 @@ fn create_proof_fixture(
     )
     .expect("failed to write fixture");
 
-    println!("Fixture saved to contracts/src/fixtures/{:?}-fixture.json", system);
+    println!(
+        "Fixture saved to contracts/src/fixtures/{:?}-fixture.json",
+        system
+    );
 }

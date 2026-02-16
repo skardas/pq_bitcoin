@@ -13,6 +13,8 @@ A **post-quantum Bitcoin and Ethereum address migration framework** built on SP1
 - [Architecture](#architecture)
 - [Post-Quantum Cryptography: ML-DSA](#post-quantum-cryptography-ml-dsa)
 - [On-Chain Verification](#on-chain-verification)
+- [CLI Tools](#cli-tools)
+- [Migration Indexer](#migration-indexer)
 - [Quick Start](#quick-start)
 - [Test Coverage](#test-coverage)
 - [References](#references)
@@ -238,10 +240,12 @@ The SP1 prover uses the **FRI (Fast Reed-Solomon Interactive Oracle Proof)** pro
 ```
 pq_bitcoin/
 ├── lib/                        # Shared library
-│   └── src/
-│       ├── lib.rs              # BTC/ETH derivation, ML-DSA constants, 28 unit tests
-│       ├── op_return.rs        # OP_RETURN payload format, script gen/parse, 32 tests
-│       └── taproot.rs          # BIP-341 Taproot PQ commitment tree, 35 tests
+│   ├── src/
+│   │   ├── lib.rs              # BTC/ETH derivation, ML-DSA constants, 28 unit tests
+│   │   ├── op_return.rs        # OP_RETURN payload format, script gen/parse, 32 tests
+│   │   └── taproot.rs          # BIP-341 Taproot PQ commitment tree, 35 tests
+│   └── tests/
+│       └── btc_migrate_integration.rs  # 12 end-to-end integration tests
 │
 ├── program/                    # BTC zkVM circuit (SP1 guest)
 │   └── src/main.rs             # ECDSA verify + P2PKH derive + PQ validate
@@ -254,13 +258,18 @@ pq_bitcoin/
 │       ├── main.rs             # Key gen (secp256k1 + ML-DSA-65), execute/prove
 │       ├── evm.rs              # EVM proof generation + fixture JSON output
 │       ├── btc_migrate.rs      # OP_RETURN migration payload generator
+│       ├── taproot_addr.rs     # Taproot P2TR address generator with PQ commitments
 │       └── vkey.rs             # Print verification key
 │
 ├── contracts/                  # Solidity on-chain verifier (Ethereum path)
 │   ├── src/PQBitcoin.sol       # Migration verifier (12/12 tests, 100% coverage)
 │   └── test/PQBitcoin.t.sol    # Foundry tests (Groth16 + PLONK suites)
 │
-└── docs/                       # Research paper (PDF)
+├── indexer/                    # Migration indexer service
+│   └── src/main.rs             # REST API for scanning OP_RETURN migrations (23 tests)
+│
+└── docs/                       # Research paper + BIP draft
+    └── BIP-CHECKQUANTUMSIG.md  # OP_CHECKQUANTUMSIG BIP specification
 ```
 
 ### Dual Verification Paths
@@ -544,6 +553,69 @@ sequenceDiagram
 
 ---
 
+## CLI Tools
+
+### `btc_migrate` — OP_RETURN Migration Payload Generator
+
+Generates a `PQMG` OP_RETURN payload binding a Bitcoin address to a post-quantum key:
+
+```sh
+cd script
+cargo run --release --bin btc_migrate                        # random keys, JSON output
+cargo run --release --bin btc_migrate -- --format hex         # raw hex script
+cargo run --release --bin btc_migrate -- --privkey <hex>      # use specific ECDSA key
+cargo run --release --bin btc_migrate -- --pq_pubkey <hex>    # use specific PQ key
+```
+
+### `taproot_addr` — Taproot P2TR Address Generator
+
+Generates a Taproot (P2TR) address with a PQ key commitment embedded in the script tree:
+
+```sh
+cd script
+cargo run --release --bin taproot_addr                             # demo keys, mainnet
+cargo run --release --bin taproot_addr -- --network testnet         # testnet (tb1p...)
+cargo run --release --bin taproot_addr -- --timelock 288            # custom timelock (2 days)
+cargo run --release --bin taproot_addr -- --internal-key <hex32>    # specific x-only key
+cargo run --release --bin taproot_addr -- --pq-pubkey <hex>         # specific PQ key
+```
+
+**Output includes:** P2TR address, Merkle root, control blocks for both spending paths (PQ leaf + timelock fallback), and full JSON for programmatic use.
+
+---
+
+## Migration Indexer
+
+A standalone REST API service that scans Bitcoin transactions for `PQMG` OP_RETURN payloads and maintains an in-memory migration registry.
+
+### Run the Indexer
+
+```sh
+cd indexer
+cargo run            # Starts on http://127.0.0.1:3000
+```
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/migrations` | GET | List all indexed migrations |
+| `/migrations/:txid` | GET | Get migration by transaction ID |
+| `/migrations/pq/:hash` | GET | Find migrations by PQ key hash |
+| `/stats` | GET | Index statistics (total count, latest block, ML-DSA level breakdown) |
+| `/scan` | POST | Submit a raw OP_RETURN script hex for decoding and indexing |
+
+### Example: Scan a Transaction
+
+```sh
+curl -X POST http://127.0.0.1:3000/scan \
+  -H 'Content-Type: application/json' \
+  -d '{"script_hex": "6a4c47504....", "txid": "abc123", "block_height": 800000}'
+```
+
+---
+
 ## Quick Start
 
 ### Requirements
@@ -578,19 +650,14 @@ cargo run --release --bin evm -- --system groth16
 cargo run --release --bin evm -- --system plonk
 ```
 
-### 4. Generate OP_RETURN Migration Payload (Bitcoin Path)
+### 4. Run All Tests
 
 ```sh
-cd script
-cargo run --release --bin btc_migrate              # random keys
-cargo run --release --bin btc_migrate -- --format hex # raw script hex
-```
-
-### 5. Run All Tests
-
-```sh
-# ── Rust library tests (99 tests) ──────────────────────────────
+# ── Rust library + integration tests (111 tests) ──────────────
 cargo test --package pq_bitcoin-lib
+
+# ── Migration indexer tests (23 tests) ─────────────────────────
+cd indexer && cargo test && cd ..
 
 # ── Solidity contract tests (12 tests) ─────────────────────────
 cd contracts && forge test -vvv
@@ -601,15 +668,15 @@ cargo llvm-cov --package pq_bitcoin-lib
 # ── Solidity coverage report ───────────────────────────────────
 cd contracts && forge coverage
 
-# ── Run everything at once ─────────────────────────────────────
-cargo test --package pq_bitcoin-lib && cd contracts && forge test -vvv && cd ..
+# ── Run everything at once (134 Rust + 12 Solidity) ────────────
+cargo test --package pq_bitcoin-lib && cd indexer && cargo test && cd ../contracts && forge test -vvv && cd ..
 ```
 
 ---
 
 ## Test Coverage
 
-### Rust Library — 62 Tests
+### Rust Library — 99 Unit Tests
 
 | Category | Tests | What's Covered |
 |----------|-------|----------------|
@@ -625,17 +692,37 @@ cargo test --package pq_bitcoin-lib && cd contracts && forge test -vvv && cd ..
 | Flags | 6 | Groth16, PLONK, dual-sig, combined, none, preserved through encode/decode |
 | Script Gen/Parse | 7 | to_script, is_migration_script (valid, non-OP_RETURN, wrong magic, empty), from_script roundtrip, invalid, direct push |
 | Constructors & Determinism | 3 | from_hashes, deterministic encoding, different keys/proofs |
-| **Taproot Tagged Hash** | **4** | Deterministic, domain separation (different tags), different data, length |
-| **Compact Size** | **4** | Small (1B), medium (253+), large (254+), zero |
-| **PQ Script** | **2** | Correct opcodes, different hashes produce different scripts |
-| **Timelock Script** | **3** | Small (OP_1..16), medium (1B push), large (2B push) |
-| **Checksig Script** | **1** | x-only pubkey + OP_CHECKSIG structure |
-| **TapLeaf/TapBranch** | **5** | Deterministic, different scripts, hash length, branch commutativity, different children |
-| **TapTweak** | **4** | With/without Merkle root, differ, different keys |
-| **PQ Migration Tree** | **7** | Build, different keys, different timelocks, verify commitment (valid/invalid), tweak hash |
-| **Control Blocks** | **4** | PQ leaf structure, parity bit, timelock leaf structure, different siblings |
-| **Edge Cases** | **3** | ML-DSA-44 key, ML-DSA-87 key, timelock boundaries (16/128) |
+| Taproot Tagged Hash | 4 | Deterministic, domain separation (different tags), different data, length |
+| Compact Size | 4 | Small (1B), medium (253+), large (254+), zero |
+| PQ Script | 2 | Correct opcodes, different hashes produce different scripts |
+| Timelock Script | 3 | Small (OP_1..16), medium (1B push), large (2B push) |
+| Checksig Script | 1 | x-only pubkey + OP_CHECKSIG structure |
+| TapLeaf/TapBranch | 5 | Deterministic, different scripts, hash length, branch commutativity, different children |
+| TapTweak | 4 | With/without Merkle root, differ, different keys |
+| PQ Migration Tree | 7 | Build, different keys, different timelocks, verify commitment (valid/invalid), tweak hash |
+| Control Blocks | 4 | PQ leaf structure, parity bit, timelock leaf structure, different siblings |
+| Edge Cases | 3 | ML-DSA-44 key, ML-DSA-87 key, timelock boundaries (16/128) |
 | **Total** | **99** | |
+
+### Integration Tests — 12 Tests
+
+| Category | Tests | What's Covered |
+|----------|-------|----------------|
+| End-to-End Flow | 3 | Full migration lifecycle for ML-DSA-44, ML-DSA-65, ML-DSA-87 |
+| Hash Verification | 2 | Independent third-party commitment verification, wrong key rejection |
+| Flag Combinations | 1 | All 6 flag permutations (Groth16, PLONK, dual-sig, combos) |
+| Edge Cases | 4 | Invalid key sizes, valid key sizes, non-OP_RETURN scripts, address determinism |
+| Interop | 2 | Different keys → different addresses, from_hashes indexer reconstruction |
+| **Total** | **12** | |
+
+### Migration Indexer — 23 Tests
+
+| Category | Tests | What's Covered |
+|----------|-------|----------------|
+| Decoder | 9 | Valid payload decoding, magic/version validation, flag parsing, ML-DSA level detection |
+| Store | 6 | Insert, duplicate rejection, txid/PQ hash lookup, stats, latest block tracking |
+| API | 8 | Health, list, scan (valid/invalid/duplicate/no-payload), stats, not-found |
+| **Total** | **23** | |
 
 ### Solidity Contracts — 12 Tests (100% Coverage)
 
@@ -644,6 +731,16 @@ cargo test --package pq_bitcoin-lib && cd contracts && forge test -vvv && cd ..
 | Groth16 | 8 | Valid proof, view-only, replay protection, isMigrated, event emission, invalid proof revert, multi-address migration, constructor state |
 | PLONK | 4 | Valid proof, view-only, replay protection, invalid proof revert |
 | **Total** | **12** | **100%** lines, statements, branches, functions |
+
+### Grand Total: 146 Tests
+
+| Suite | Count |
+|-------|-------|
+| Rust Unit Tests | 99 |
+| Rust Integration Tests | 12 |
+| Indexer Tests | 23 |
+| Solidity Tests | 12 |
+| **Total** | **146** |
 
 ---
 

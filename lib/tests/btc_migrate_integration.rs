@@ -4,10 +4,10 @@
 //! functions directly (since running the binary requires ML-DSA keygen
 //! which is slow in debug mode).
 
-use hashes::{sha256, Hash};
+use hashes::{Hash, sha256};
 use pq_bitcoin_lib::op_return::{
-    MigrationPayload, FLAG_DUAL_SIG, FLAG_GROTH16, FLAG_PLONK, LEVEL_ML_DSA_44,
-    LEVEL_ML_DSA_65, LEVEL_ML_DSA_87, MAGIC, PAYLOAD_SIZE, VERSION,
+    FLAG_DUAL_SIG, FLAG_GROTH16, FLAG_PLONK, LEVEL_ML_DSA_44, LEVEL_ML_DSA_65, LEVEL_ML_DSA_87,
+    MAGIC, MigrationPayload, PAYLOAD_SIZE, VERSION,
 };
 use pq_bitcoin_lib::{ml_dsa_level_name, public_key_to_btc_address, validate_pq_pubkey};
 

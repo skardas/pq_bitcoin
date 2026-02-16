@@ -15,7 +15,7 @@
 //! └──────────┴────────┴──────────────────┴──────────────────┴───────┴─────────┘
 //!                                                              = 71 bytes
 
-use hashes::{sha256, Hash};
+use hashes::{Hash, sha256};
 
 /// Magic bytes identifying a PQ migration OP_RETURN payload.
 pub const MAGIC: [u8; 4] = *b"PQMG";
@@ -99,7 +99,12 @@ impl MigrationPayload {
         flags: u8,
         level: u8,
     ) -> Self {
-        Self { pq_pubkey_hash, proof_hash, flags, level }
+        Self {
+            pq_pubkey_hash,
+            proof_hash,
+            flags,
+            level,
+        }
     }
 
     /// Encode the payload into a 71-byte OP_RETURN data buffer.
@@ -205,7 +210,8 @@ impl MigrationPayload {
             return false;
         }
         // OP_RETURN + OP_PUSHDATA1 + len + payload
-        if script.len() >= 3 + PAYLOAD_SIZE && script[1] == 0x4c && script[2] == PAYLOAD_SIZE as u8 {
+        if script.len() >= 3 + PAYLOAD_SIZE && script[1] == 0x4c && script[2] == PAYLOAD_SIZE as u8
+        {
             return script[3..7] == MAGIC;
         }
         // OP_RETURN + direct push (len byte) + payload
@@ -501,7 +507,8 @@ mod tests {
     fn test_from_hashes() {
         let pq_hash = [0x11; 32];
         let proof_hash = [0x22; 32];
-        let payload = MigrationPayload::from_hashes(pq_hash, proof_hash, FLAG_PLONK, LEVEL_ML_DSA_65);
+        let payload =
+            MigrationPayload::from_hashes(pq_hash, proof_hash, FLAG_PLONK, LEVEL_ML_DSA_65);
         assert_eq!(payload.pq_pubkey_hash, pq_hash);
         assert_eq!(payload.proof_hash, proof_hash);
         assert!(payload.is_plonk());

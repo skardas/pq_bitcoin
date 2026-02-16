@@ -5,12 +5,14 @@ use rand::rngs::OsRng;
 use secp256k1::{Secp256k1, SecretKey};
 use signature::Signer;
 
-use pq_bitcoin_lib::op_return::{MigrationPayload, FLAG_GROTH16, PAYLOAD_SIZE};
-use pq_bitcoin_lib::{public_key_to_btc_address, validate_pq_pubkey, ml_dsa_level_name};
+use pq_bitcoin_lib::op_return::{FLAG_GROTH16, MigrationPayload, PAYLOAD_SIZE};
+use pq_bitcoin_lib::{ml_dsa_level_name, public_key_to_btc_address, validate_pq_pubkey};
 
 #[derive(Parser)]
 #[command(name = "btc-migrate")]
-#[command(about = "Generate a Bitcoin OP_RETURN migration payload binding a BTC address to a post-quantum key")]
+#[command(
+    about = "Generate a Bitcoin OP_RETURN migration payload binding a BTC address to a post-quantum key"
+)]
 struct Args {
     /// Optional: hex-encoded ECDSA private key (32 bytes). If not provided, a random key is generated.
     #[arg(long)]
@@ -43,7 +45,8 @@ fn main() {
             let mut rng = OsRng;
             let mut key_bytes = [0u8; 32];
             use rand::TryRngCore;
-            rng.try_fill_bytes(&mut key_bytes).expect("Random key generation failed");
+            rng.try_fill_bytes(&mut key_bytes)
+                .expect("Random key generation failed");
             SecretKey::from_slice(&key_bytes).expect("Invalid random key")
         }
     };
@@ -57,9 +60,7 @@ fn main() {
 
     // ── 3. PQ keypair ──────────────────────────────────────────
     let pq_public_key_bytes = match &args.pq_pubkey {
-        Some(hex_key) => {
-            hex::decode(hex_key).expect("Invalid hex PQ public key")
-        }
+        Some(hex_key) => hex::decode(hex_key).expect("Invalid hex PQ public key"),
         None => {
             let mut rng = OsRng;
             let pq_signing_key = ml_dsa_65::SigningKey::generate(&mut rng);
@@ -70,27 +71,48 @@ fn main() {
 
     assert!(
         validate_pq_pubkey(&pq_public_key_bytes),
-        "PQ public key has invalid size: {} bytes", pq_public_key_bytes.len()
+        "PQ public key has invalid size: {} bytes",
+        pq_public_key_bytes.len()
     );
-    println!("PQ Key Type:       {} ({} bytes)", ml_dsa_level_name(&pq_public_key_bytes), pq_public_key_bytes.len());
+    println!(
+        "PQ Key Type:       {} ({} bytes)",
+        ml_dsa_level_name(&pq_public_key_bytes),
+        pq_public_key_bytes.len()
+    );
 
     // ── 4. Create mock proof placeholder ───────────────────────
     // In production, this would be the real STARK proof bytes.
     // For now, we hash the BTC address as a placeholder.
     let mock_proof = btc_address.clone();
-    println!("Proof:             (placeholder — run `cargo run --release --bin main -- --prove` for real proof)\n");
+    println!(
+        "Proof:             (placeholder — run `cargo run --release --bin main -- --prove` for real proof)\n"
+    );
 
     // ── 5. Build OP_RETURN payload ─────────────────────────────
     let payload = MigrationPayload::new(&pq_public_key_bytes, &mock_proof, FLAG_GROTH16);
     let encoded = payload.encode();
 
-    println!("── OP_RETURN Payload ({} bytes) ─────────────────────", PAYLOAD_SIZE);
+    println!(
+        "── OP_RETURN Payload ({} bytes) ─────────────────────",
+        PAYLOAD_SIZE
+    );
     println!("Magic:             PQMG");
     println!("Version:           0x01");
-    println!("PQ Key Hash:       {}", hex::encode(&payload.pq_pubkey_hash));
+    println!(
+        "PQ Key Hash:       {}",
+        hex::encode(&payload.pq_pubkey_hash)
+    );
     println!("Proof Hash:        {}", hex::encode(&payload.proof_hash));
-    println!("Flags:             0x{:02x} (groth16={})", payload.flags, payload.is_groth16());
-    println!("Level:             {} (0x{:02x})", payload.level_name(), payload.level);
+    println!(
+        "Flags:             0x{:02x} (groth16={})",
+        payload.flags,
+        payload.is_groth16()
+    );
+    println!(
+        "Level:             {} (0x{:02x})",
+        payload.level_name(),
+        payload.level
+    );
     println!();
 
     // ── 6. Generate full OP_RETURN script ──────────────────────
@@ -104,8 +126,14 @@ fn main() {
             println!("── Output ──────────────────────────────────────────");
             println!("{{");
             println!("  \"btc_address\": \"0x{}\",", hex::encode(&btc_address));
-            println!("  \"pq_pubkey_hash\": \"0x{}\",", hex::encode(&payload.pq_pubkey_hash));
-            println!("  \"proof_hash\": \"0x{}\",", hex::encode(&payload.proof_hash));
+            println!(
+                "  \"pq_pubkey_hash\": \"0x{}\",",
+                hex::encode(&payload.pq_pubkey_hash)
+            );
+            println!(
+                "  \"proof_hash\": \"0x{}\",",
+                hex::encode(&payload.proof_hash)
+            );
             println!("  \"op_return_script\": \"0x{}\",", hex::encode(&script));
             println!("  \"op_return_payload\": \"0x{}\",", hex::encode(&encoded));
             println!("  \"ml_dsa_level\": \"{}\",", payload.level_name());

@@ -12,14 +12,14 @@
 //! RUST_LOG=info cargo run --release -- --prove --prove-type=plonk
 //! ```
 
-use hashes::{sha256, Hash};
-use pq_bitcoin_lib::{public_key_to_btc_address, validate_pq_pubkey, ml_dsa_level_name};
-use rand::rngs::OsRng;
-use rand::TryRngCore;
-use secp256k1::{ecdsa, Error, Message, PublicKey, Secp256k1, SecretKey, Signing};
-use sp1_sdk::{include_elf, HashableKey, ProverClient, SP1Stdin};
-use std::time::{SystemTime, UNIX_EPOCH};
 use clap::{Parser, ValueEnum};
+use hashes::{Hash, sha256};
+use pq_bitcoin_lib::{ml_dsa_level_name, public_key_to_btc_address, validate_pq_pubkey};
+use rand::TryRngCore;
+use rand::rngs::OsRng;
+use secp256k1::{Error, Message, PublicKey, Secp256k1, SecretKey, Signing, ecdsa};
+use sp1_sdk::{HashableKey, ProverClient, SP1Stdin, include_elf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 // ML-DSA imports
 use ml_dsa::ml_dsa_65;
@@ -94,10 +94,16 @@ fn main() {
     let pq_public_key_bytes = pq_verifying_key.as_ref().to_vec();
 
     // Validate the PQ public key format
-    assert!(validate_pq_pubkey(&pq_public_key_bytes),
-        "Generated PQ public key has invalid size: {}", pq_public_key_bytes.len());
+    assert!(
+        validate_pq_pubkey(&pq_public_key_bytes),
+        "Generated PQ public key has invalid size: {}",
+        pq_public_key_bytes.len()
+    );
 
-    println!("PQ Key Type:       {}", ml_dsa_level_name(&pq_public_key_bytes));
+    println!(
+        "PQ Key Type:       {}",
+        ml_dsa_level_name(&pq_public_key_bytes)
+    );
     println!("PQ Public Key Size: {} bytes", pq_public_key_bytes.len());
 
     // Optionally sign Something with the PQ key to prove it works
@@ -139,10 +145,10 @@ fn main() {
                 .run()
                 .expect("failed to generate normal proof"),
         };
-        if matches!(args.prove_type, ProveType::Groth|ProveType::Plonk) {
+        if matches!(args.prove_type, ProveType::Groth | ProveType::Plonk) {
             println!("Proof size {}", proof.bytes().len());
         }
-        
+
         println!("Public values size {}", proof.public_values.to_vec().len());
         let system_time = SystemTime::now();
         println!(

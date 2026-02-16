@@ -4,7 +4,7 @@ pub mod taproot;
 use alloy_sol_types::sol;
 use sha3::{Digest, Keccak256};
 
-use hashes::{ripemd160, sha256, Hash};
+use hashes::{Hash, ripemd160, sha256};
 use secp256k1::Message;
 
 sol! {
@@ -37,14 +37,18 @@ pub const ML_DSA_MAX_PK_SIZE: usize = 2592;
 // ============================================================
 
 pub fn public_key_to_btc_address(pubkey: &[u8]) -> Vec<u8> {
-    assert_eq!(pubkey.len(), 33, "Public key should be 33 bytes (compressed)");
+    assert_eq!(
+        pubkey.len(),
+        33,
+        "Public key should be 33 bytes (compressed)"
+    );
     // Step 1: SHA-256 hash
     let msg = sha256::Hash::hash(pubkey);
     let msg = Message::from_digest_slice(msg.as_ref()).unwrap();
 
     // Step 2: RIPEMD-160 hash
     let ripemd160_hash = ripemd160::Hash::hash(msg.as_ref());
-    let msg :  &[u8] = ripemd160_hash.as_ref();
+    let msg: &[u8] = ripemd160_hash.as_ref();
 
     // Step 3: Add version byte (0x00 for mainnet)
     let mut versioned_payload = vec![0x00];
@@ -67,7 +71,11 @@ pub fn public_key_to_btc_address(pubkey: &[u8]) -> Vec<u8> {
 // ============================================================
 
 pub fn public_key_to_eth_address(pubkey: &[u8]) -> Vec<u8> {
-    assert_eq!(pubkey.len(), 64, "Public key should be 64 bytes (uncompressed, without 0x04 prefix)");
+    assert_eq!(
+        pubkey.len(),
+        64,
+        "Public key should be 64 bytes (uncompressed, without 0x04 prefix)"
+    );
     let mut hasher = Keccak256::new();
     hasher.update(pubkey);
     let hash = hasher.finalize();
@@ -112,9 +120,9 @@ mod tests {
     #[test]
     fn test_btc_address_from_compressed_pubkey() {
         // Known compressed public key (33 bytes, starts with 0x02 or 0x03)
-        let pubkey = hex::decode(
-            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
-        ).unwrap();
+        let pubkey =
+            hex::decode("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+                .unwrap();
         assert_eq!(pubkey.len(), 33);
 
         let address = public_key_to_btc_address(&pubkey);
@@ -126,9 +134,9 @@ mod tests {
 
     #[test]
     fn test_btc_address_deterministic() {
-        let pubkey = hex::decode(
-            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
-        ).unwrap();
+        let pubkey =
+            hex::decode("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+                .unwrap();
 
         let addr1 = public_key_to_btc_address(&pubkey);
         let addr2 = public_key_to_btc_address(&pubkey);
@@ -144,9 +152,9 @@ mod tests {
 
     #[test]
     fn test_btc_address_checksum_valid() {
-        let pubkey = hex::decode(
-            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
-        ).unwrap();
+        let pubkey =
+            hex::decode("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+                .unwrap();
         let address = public_key_to_btc_address(&pubkey);
 
         // Re-derive checksum from the first 21 bytes
@@ -334,9 +342,9 @@ mod tests {
     #[test]
     fn test_btc_address_with_03_prefix_key() {
         // Compressed public key starting with 0x03
-        let pubkey = hex::decode(
-            "03a34b99f22c790c4e36b2b3c2c35a36db06226e41c692fc82b8b56ac1c540c5bd"
-        ).unwrap();
+        let pubkey =
+            hex::decode("03a34b99f22c790c4e36b2b3c2c35a36db06226e41c692fc82b8b56ac1c540c5bd")
+                .unwrap();
         assert_eq!(pubkey.len(), 33);
 
         let address = public_key_to_btc_address(&pubkey);
@@ -346,12 +354,12 @@ mod tests {
 
     #[test]
     fn test_btc_address_different_keys_produce_different_addresses() {
-        let pubkey1 = hex::decode(
-            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
-        ).unwrap();
-        let pubkey2 = hex::decode(
-            "03a34b99f22c790c4e36b2b3c2c35a36db06226e41c692fc82b8b56ac1c540c5bd"
-        ).unwrap();
+        let pubkey1 =
+            hex::decode("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+                .unwrap();
+        let pubkey2 =
+            hex::decode("03a34b99f22c790c4e36b2b3c2c35a36db06226e41c692fc82b8b56ac1c540c5bd")
+                .unwrap();
 
         let addr1 = public_key_to_btc_address(&pubkey1);
         let addr2 = public_key_to_btc_address(&pubkey2);
@@ -405,4 +413,3 @@ mod tests {
         assert_eq!(ML_DSA_MAX_PK_SIZE, 2592);
     }
 }
-

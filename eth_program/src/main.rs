@@ -14,12 +14,12 @@
 //! 2. ECDSA signature is valid for the uncompressed public key
 //! 3. PQ public key has a valid ML-DSA format
 
-use alloy_sol_types::private::Bytes;
 use alloy_sol_types::SolType;
+use alloy_sol_types::private::Bytes;
 use sha3::{Digest, Keccak256};
 
-use secp256k1::{ecdsa, Error, Message, PublicKey, Secp256k1, Verification};
-use pq_bitcoin_lib::{validate_pq_pubkey, PublicValuesStruct};
+use pq_bitcoin_lib::{PublicValuesStruct, validate_pq_pubkey};
+use secp256k1::{Error, Message, PublicKey, Secp256k1, Verification, ecdsa};
 sp1_zkvm::entrypoint!(main);
 
 /// Verify an ECDSA signature over a Keccak-256 hash of the message.
@@ -43,7 +43,11 @@ fn verify_eth_sig<C: Verification>(
 
 /// Derive Ethereum address from uncompressed public key (sans 0x04 prefix is 64 bytes).
 fn derive_eth_address(pubkey_raw: &[u8]) -> Vec<u8> {
-    assert_eq!(pubkey_raw.len(), 64, "Raw uncompressed public key (sans prefix) must be 64 bytes");
+    assert_eq!(
+        pubkey_raw.len(),
+        64,
+        "Raw uncompressed public key (sans prefix) must be 64 bytes"
+    );
     let mut hasher = Keccak256::new();
     hasher.update(pubkey_raw);
     let hash = hasher.finalize();
@@ -54,10 +58,10 @@ pub fn main() {
     let secp = Secp256k1::new();
 
     // Read inputs from host
-    let pubkey_vec: Vec<u8> = sp1_zkvm::io::read::<Vec<u8>>();       // 65-byte uncompressed key (with 0x04 prefix)
-    let eth_address: Vec<u8> = sp1_zkvm::io::read::<Vec<u8>>();      // 20-byte ETH address
-    let sig_serialized: Vec<u8> = sp1_zkvm::io::read::<Vec<u8>>();   // 64-byte compact ECDSA sig
-    let pq_public_key: Vec<u8> = sp1_zkvm::io::read::<Vec<u8>>();    // ML-DSA public key
+    let pubkey_vec: Vec<u8> = sp1_zkvm::io::read::<Vec<u8>>(); // 65-byte uncompressed key (with 0x04 prefix)
+    let eth_address: Vec<u8> = sp1_zkvm::io::read::<Vec<u8>>(); // 20-byte ETH address
+    let sig_serialized: Vec<u8> = sp1_zkvm::io::read::<Vec<u8>>(); // 64-byte compact ECDSA sig
+    let pq_public_key: Vec<u8> = sp1_zkvm::io::read::<Vec<u8>>(); // ML-DSA public key
 
     // Convert to fixed-size arrays
     let pubkey_uncompressed: [u8; 65] = pubkey_vec
@@ -69,24 +73,31 @@ pub fn main() {
         .expect("ECDSA signature must be exactly 64 bytes");
 
     // ── 1. Verify ECDSA signature ──────────────────────────────
-    assert!(verify_eth_sig(&secp, eth_address.as_slice(), sig, &pubkey_uncompressed).unwrap(),
-        "ECDSA signature verification failed");
+    assert!(
+        verify_eth_sig(&secp, eth_address.as_slice(), sig, &pubkey_uncompressed).unwrap(),
+        "ECDSA signature verification failed"
+    );
 
     // ── 2. Verify ETH address derivation (Keccak-256) ──────────
     // Use bytes 1..65 (strip 0x04 prefix) for key derivation
     let derived_eth_address = derive_eth_address(&pubkey_uncompressed[1..]);
-    assert_eq!(derived_eth_address, eth_address,
-        "Derived ETH address does not match provided address");
+    assert_eq!(
+        derived_eth_address, eth_address,
+        "Derived ETH address does not match provided address"
+    );
 
     // ── 3. Validate PQ public key format (ML-DSA) ──────────────
-    assert!(validate_pq_pubkey(&pq_public_key),
-        "PQ public key has invalid size: {} bytes", pq_public_key.len());
+    assert!(
+        validate_pq_pubkey(&pq_public_key),
+        "PQ public key has invalid size: {} bytes",
+        pq_public_key.len()
+    );
 
     // ── 4. Commit public values ────────────────────────────────
     // Note: We reuse PublicValuesStruct but the btc_address field holds the ETH address.
     // This is acceptable for the PoC; a production system would use a separate struct.
     let bytes = PublicValuesStruct::abi_encode(&PublicValuesStruct {
-        btc_address: Bytes::from(eth_address),  // Reusing field name for ETH address
+        btc_address: Bytes::from(eth_address), // Reusing field name for ETH address
         pq_pubkey: Bytes::from(pq_public_key),
     });
     sp1_zkvm::io::commit_slice(&bytes);

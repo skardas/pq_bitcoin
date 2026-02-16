@@ -26,7 +26,7 @@
 //! TaggedHash(tag, data) = SHA-256(SHA-256(tag) || SHA-256(tag) || data)
 //! ```
 
-use hashes::{sha256, Hash};
+use hashes::{Hash, sha256};
 
 // ============================================================
 //  Tagged Hash (BIP-340/341)
@@ -300,7 +300,11 @@ impl PQMigrationTree {
     }
 
     /// Generate the control block for spending via the timelock fallback leaf.
-    pub fn timelock_leaf_control_block(&self, internal_key: &[u8; 32], output_key_parity: u8) -> Vec<u8> {
+    pub fn timelock_leaf_control_block(
+        &self,
+        internal_key: &[u8; 32],
+        output_key_parity: u8,
+    ) -> Vec<u8> {
         let mut cb = Vec::with_capacity(1 + 32 + 32);
         cb.push(TAPSCRIPT_LEAF_VERSION | (output_key_parity & 1));
         cb.extend_from_slice(internal_key);
@@ -426,7 +430,7 @@ mod tests {
     #[test]
     fn test_timelock_script_medium() {
         let script = build_timelock_script(100);
-        assert_eq!(script[0], 1);   // push 1 byte
+        assert_eq!(script[0], 1); // push 1 byte
         assert_eq!(script[1], 100); // value
         assert_eq!(script[2], OP_CSV);
     }
@@ -434,7 +438,7 @@ mod tests {
     #[test]
     fn test_timelock_script_large() {
         let script = build_timelock_script(1000);
-        assert_eq!(script[0], 2);    // push 2 bytes
+        assert_eq!(script[0], 2); // push 2 bytes
         assert_eq!(script[1], 0xE8); // 1000 LE low byte
         assert_eq!(script[2], 0x03); // 1000 LE high byte
         assert_eq!(script[3], OP_CSV);
@@ -654,7 +658,7 @@ mod tests {
         assert_eq!(s16[0], 0x50 + 16); // OP_16
 
         let s17 = build_timelock_script(17);
-        assert_eq!(s17[0], 1);  // push 1 byte
+        assert_eq!(s17[0], 1); // push 1 byte
         assert_eq!(s17[1], 17); // value
     }
 
