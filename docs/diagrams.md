@@ -35,7 +35,7 @@ flowchart TB
     subgraph CIRCUIT["⚡ SP1 zkSTARK Circuit"]
         direction TB
         c1["<b>C1: Address Binding</b><br/>a' = 0x00 ‖ RIPEMD-160(SHA-256(Q)) ‖ c₄<br/>assert a' == Address<sub>t</sub>"]
-        c2["<b>C2: Ownership Proof</b><br/>m = SHA-256(Address<sub>t</sub>)<br/>assert ECDSA.Verify(Q, m, σ) == 1"]
+        c2["<b>C2: Ownership Proof</b><br/>m = SHA-256(\"PQ-MIG\" ‖ h₁₆₀ ‖ SHA-256(pk<sub>pq</sub>))<br/>assert ECDSA.Verify(Q, m, σ) == 1"]
         c3["<b>C3: PQ Key Validation</b><br/>assert |pk<sub>pq</sub>| ∈ {1312, 1952, 2592}"]
         c1 --> c2 --> c3
     end
@@ -94,7 +94,7 @@ flowchart LR
     subgraph S1["Stage 1: Key Generation"]
         ecdsa["secp256k1<br/>KeyGen"]
         mldsa["ML-DSA-65<br/>KeyGen"]
-        sign["ECDSA.Sign<br/>(sk, addr)"]
+        sign["ECDSA.Sign<br/>(sk, migration_msg)"]
         ecdsa --> sign
     end
 

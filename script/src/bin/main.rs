@@ -1,8 +1,8 @@
 //! PQ Bitcoin — SP1 Host Script
 //!
-//! Generates a secp256k1 keypair, derives the BTC address, signs it,
-//! generates an ML-DSA-65 post-quantum keypair, and feeds everything
-//! into the SP1 zkVM program for proof generation.
+//! Generates a secp256k1 keypair, derives the BTC address, signs the
+//! migration message, generates an ML-DSA-65 post-quantum keypair,
+//! and feeds everything into the SP1 zkVM program for proof generation.
 //!
 //! Usage:
 //! ```shell
@@ -14,7 +14,10 @@
 
 use clap::{Parser, ValueEnum};
 use hashes::{Hash, sha256};
-use pq_bitcoin_lib::{ml_dsa_level_name, public_key_to_btc_address, validate_pq_pubkey};
+use pq_bitcoin_lib::{
+    compute_btc_migration_message, ml_dsa_level_name, public_key_to_btc_address,
+    validate_pq_pubkey,
+};
 use rand::TryRngCore;
 use rand::rngs::OsRng;
 use secp256k1::{Error, Message, PublicKey, Secp256k1, SecretKey, Signing, ecdsa};
@@ -34,15 +37,20 @@ enum ProveType {
 
 pub const PROGRAM_ELF: &[u8] = include_elf!("pq_bitcoin-program");
 
+/// Sign the migration message per the paper (Section 6.1):
+/// m = SHA-256("PQ-MIG" || h160 || SHA-256(pk_pq))
 fn sign<C: Signing>(
     secp: &Secp256k1<C>,
     sec_key: [u8; 32],
+    pq_public_key_bytes: &[u8],
 ) -> Result<(ecdsa::Signature, PublicKey, Vec<u8>), Error> {
     let sec_key = SecretKey::from_slice(&sec_key)?;
     let pub_key = sec_key.public_key(secp);
     let address = public_key_to_btc_address(&pub_key.serialize()).unwrap();
 
-    let msg = sha256::Hash::hash(address.as_slice());
+    // Paper Section 6.1: m = SHA-256("PQ-MIG" || h160 || SHA-256(pk_pq))
+    let migration_msg = compute_btc_migration_message(&address, pq_public_key_bytes);
+    let msg = sha256::Hash::hash(&migration_msg);
     let msg = Message::from_digest_slice(msg.as_ref())?;
 
     Ok((secp.sign_ecdsa(&msg, &sec_key), pub_key, address))
@@ -73,19 +81,12 @@ fn main() {
     let client = ProverClient::from_env();
     let mut stdin = SP1Stdin::new();
 
-    // ── 1. Generate ECDSA keypair and sign ──────────────────────
+    // ── 1. Generate ECDSA keypair ──────────────────────────────
     let secp = Secp256k1::new();
     let mut seckey = [0u8; 32];
     OsRng
         .try_fill_bytes(&mut seckey)
         .expect("cannot fill random bytes");
-
-    let (signature, pub_key, address) = sign(&secp, seckey).unwrap();
-    let serialized_pub_key = pub_key.serialize();
-    let serialize_sig = signature.serialize_compact();
-
-    println!("BTC Address (hex): {}", hex::encode(&address));
-    println!("ECDSA Public Key:  {}", hex::encode(serialized_pub_key));
 
     // ── 2. Generate ML-DSA-65 post-quantum keypair ─────────────
     let mut seed = Seed::default();
@@ -104,6 +105,14 @@ fn main() {
         pq_public_key_bytes.len()
     );
 
+    // ── 3. Sign migration message (needs PQ key) ───────────────
+    let (signature, pub_key, address) = sign(&secp, seckey, &pq_public_key_bytes).unwrap();
+    let serialized_pub_key = pub_key.serialize();
+    let serialize_sig = signature.serialize_compact();
+
+    println!("BTC Address (hex): {}", hex::encode(&address));
+    println!("ECDSA Public Key:  {}", hex::encode(serialized_pub_key));
+
     println!(
         "PQ Key Type:       {}",
         ml_dsa_level_name(&pq_public_key_bytes)
@@ -114,7 +123,7 @@ fn main() {
     let pq_sig = pq_signing_key.sign(&address);
     println!("PQ Signature Size: {} bytes", pq_sig.encode().len());
 
-    // ── 3. Feed inputs to SP1 zkVM ─────────────────────────────
+    // ── 4. Feed inputs to SP1 zkVM ─────────────────────────────
     stdin.write(&serialized_pub_key.to_vec());
     stdin.write(&address.to_vec());
     stdin.write(&serialize_sig.to_vec());
@@ -164,3 +173,4 @@ fn main() {
         println!("Successfully verified proof!");
     }
 }
+

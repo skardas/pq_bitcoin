@@ -170,6 +170,42 @@ pub fn ml_dsa_level_name(pq_pubkey: &[u8]) -> &'static str {
 }
 
 // ============================================================
+//  Migration Message Construction (Paper Section 6.1)
+// ============================================================
+
+/// Domain-separation prefix for PQ migration messages.
+pub const PQ_MIG_PREFIX: &[u8] = b"PQ-MIG";
+
+/// Compute the pre-image for the BTC migration ECDSA message.
+///
+/// Per the paper (Section 6.1), the ownership proof message is:
+///
+/// ```text
+/// m = SHA-256("PQ-MIG" || h160 || SHA-256(pk_pq))
+/// ```
+///
+/// This function returns the **pre-image** (the concatenation).
+/// The caller is responsible for hashing this with SHA-256 to produce
+/// the final ECDSA message digest.
+///
+/// # Arguments
+///
+/// * `btc_address` — The full P2PKH address (25 bytes) or the 20-byte key-hash `h160`.
+/// * `pq_pubkey` — The raw ML-DSA public key bytes.
+///
+/// # Returns
+///
+/// The concatenation `"PQ-MIG" || btc_address || SHA-256(pq_pubkey)`.
+pub fn compute_btc_migration_message(btc_address: &[u8], pq_pubkey: &[u8]) -> Vec<u8> {
+    let pq_hash = sha256::Hash::hash(pq_pubkey);
+    let mut preimage = Vec::with_capacity(PQ_MIG_PREFIX.len() + btc_address.len() + 32);
+    preimage.extend_from_slice(PQ_MIG_PREFIX);
+    preimage.extend_from_slice(btc_address);
+    preimage.extend_from_slice(pq_hash.as_ref());
+    preimage
+}
+
+// ============================================================
 //  Tests
 // ============================================================
 
@@ -483,5 +519,67 @@ mod tests {
         assert_eq!(ML_DSA_65_SIG_SIZE, 3309);
         assert_eq!(ML_DSA_MIN_PK_SIZE, 1312);
         assert_eq!(ML_DSA_MAX_PK_SIZE, 2592);
+    }
+
+    // ----------------------------------------------------------
+    //  Migration message tests (Paper Section 6.1)
+    // ----------------------------------------------------------
+
+    #[test]
+    fn test_migration_message_starts_with_prefix() {
+        let btc_addr = vec![0x00; 25];
+        let pq_key = vec![0xAA; 1952];
+        let msg = compute_btc_migration_message(&btc_addr, &pq_key);
+        assert!(msg.starts_with(b"PQ-MIG"));
+    }
+
+    #[test]
+    fn test_migration_message_length() {
+        // "PQ-MIG" (6) + btc_address (25) + SHA-256(pq_key) (32) = 63
+        let btc_addr = vec![0x00; 25];
+        let pq_key = vec![0xAA; 1952];
+        let msg = compute_btc_migration_message(&btc_addr, &pq_key);
+        assert_eq!(msg.len(), 6 + 25 + 32);
+    }
+
+    #[test]
+    fn test_migration_message_deterministic() {
+        let btc_addr = vec![0x00; 25];
+        let pq_key = vec![0xAA; 1952];
+        let msg1 = compute_btc_migration_message(&btc_addr, &pq_key);
+        let msg2 = compute_btc_migration_message(&btc_addr, &pq_key);
+        assert_eq!(msg1, msg2);
+    }
+
+    #[test]
+    fn test_migration_message_different_pq_keys() {
+        let btc_addr = vec![0x00; 25];
+        let pq_key1 = vec![0xAA; 1952];
+        let pq_key2 = vec![0xBB; 1952];
+        let msg1 = compute_btc_migration_message(&btc_addr, &pq_key1);
+        let msg2 = compute_btc_migration_message(&btc_addr, &pq_key2);
+        assert_ne!(msg1, msg2);
+    }
+
+    #[test]
+    fn test_migration_message_different_addresses() {
+        let btc_addr1 = vec![0x00; 25];
+        let btc_addr2 = vec![0x01; 25];
+        let pq_key = vec![0xAA; 1952];
+        let msg1 = compute_btc_migration_message(&btc_addr1, &pq_key);
+        let msg2 = compute_btc_migration_message(&btc_addr2, &pq_key);
+        assert_ne!(msg1, msg2);
+    }
+
+    #[test]
+    fn test_migration_message_contains_pq_hash() {
+        let btc_addr = vec![0x00; 25];
+        let pq_key = vec![0xAA; 1952];
+        let msg = compute_btc_migration_message(&btc_addr, &pq_key);
+
+        // The last 32 bytes should be SHA-256(pq_key)
+        let expected_hash = sha256::Hash::hash(&pq_key);
+        let expected_hash: &[u8] = expected_hash.as_ref();
+        assert_eq!(&msg[msg.len() - 32..], expected_hash);
     }
 }

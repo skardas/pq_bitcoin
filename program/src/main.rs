@@ -4,17 +4,24 @@ use alloy_sol_types::SolType;
 use alloy_sol_types::private::Bytes;
 
 use hashes::{Hash, sha256};
-use pq_bitcoin_lib::{PublicValuesStruct, public_key_to_btc_address, validate_pq_pubkey};
+use pq_bitcoin_lib::{
+    PublicValuesStruct, compute_btc_migration_message, public_key_to_btc_address,
+    validate_pq_pubkey,
+};
 use secp256k1::{Error, Message, PublicKey, Secp256k1, Verification, ecdsa};
 sp1_zkvm::entrypoint!(main);
 
+/// Verify an ECDSA signature over the migration message.
+///
+/// The message is pre-computed by the caller as:
+/// `m = SHA-256("PQ-MIG" || h160 || SHA-256(pk_pq))`
 fn verify<C: Verification>(
     secp: &Secp256k1<C>,
-    msg: &[u8],
+    migration_msg: &[u8],
     sig: [u8; 64],
     pubkey: [u8; 33],
 ) -> Result<bool, Error> {
-    let msg = sha256::Hash::hash(msg);
+    let msg = sha256::Hash::hash(migration_msg);
     let msg = Message::from_digest_slice(msg.as_ref())?;
     let sig = ecdsa::Signature::from_compact(&sig)?;
     let pubkey = PublicKey::from_slice(&pubkey)?;
@@ -34,10 +41,12 @@ pub fn main() {
     let pq_public_key: Vec<u8> = sp1_zkvm::io::read::<Vec<u8>>();
 
     // ── 1. Verify ECDSA signature ──────────────────────────────
+    // Paper Section 6.1: m = SHA-256("PQ-MIG" || h160 || SHA-256(pk_pq))
+    let migration_msg = compute_btc_migration_message(&btc_address, &pq_public_key);
     assert!(
         verify(
             &secp,
-            btc_address.as_slice(),
+            &migration_msg,
             sig_serialized.try_into().unwrap(),
             pubkey
         )

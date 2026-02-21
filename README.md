@@ -71,6 +71,7 @@ classDiagram
     class pq_bitcoin {
         +public_key_to_btc_address(pubkey) Result~Vec~
         +public_key_to_eth_address(pubkey) Result~Vec~
+        +compute_btc_migration_message(addr, pq_key) Vec~u8~
         +validate_pq_pubkey(key) bool
         +ml_dsa_level_name(key) str
     }
@@ -220,10 +221,11 @@ sequenceDiagram
     participant Chain as Blockchain
 
     User->>User: Generate ML-DSA keypair (pk_pq, sk_pq)
-    User->>User: Sign addr_BTC with ECDSA
-    User->>SP1: Private: (Q, sig, d_ecdsa) + Public: (addr_BTC, pk_pq)
-    SP1->>SP1: Verify sig(addr_BTC) under Q
-    SP1->>SP1: Assert SHA256(RIPEMD160(Q)) == addr_BTC
+    User->>User: Compute m = SHA-256("PQ-MIG" ‖ addr ‖ SHA-256(pk_pq))
+    User->>User: Sign migration msg with ECDSA
+    User->>SP1: Private: (Q, sig) + Public: (addr_BTC, pk_pq)
+    SP1->>SP1: Rebuild m, verify ECDSA.Verify(Q, m, sig)
+    SP1->>SP1: Assert RIPEMD160(SHA256(Q)) == addr_BTC
     SP1->>SP1: Assert validate(pk_pq) ∈ {ML-DSA-44, 65, 87}
     SP1->>SP1: Generate STARK proof π
     SP1-->>Chain: Submit (π, addr_BTC, pk_pq)
@@ -267,7 +269,7 @@ $$
 
 **Circuit constraints:**
 
-1. $\text{ECDSA.Verify}(\sigma, Q, \text{SHA-256}(\text{addr})) = \text{true}$
+1. $m = \text{SHA-256}(\texttt{"PQ-MIG"} \| \text{addr} \| \text{SHA-256}(pk_{pq}))$, then $\text{ECDSA.Verify}(\sigma, Q, m) = \text{true}$
 2. $0\text{x}00 \| \text{RIPEMD-160}(\text{SHA-256}(Q)) \| C = \text{addr}$
 3. $|pk_{pq}| \in \{1312, 1952, 2592\}$
 
@@ -289,7 +291,7 @@ $$
 ```mermaid
 graph LR
     subgraph "Host (script/)"
-        A["Key Generation<br/>secp256k1 + ML-DSA-65"] --> B["Sign Address"]
+        A["Key Generation<br/>secp256k1 + ML-DSA-65"] --> B["Sign Migration Message<br/><small>m = SHA-256(PQ-MIG ‖ addr ‖ SHA-256(pk_pq))</small>"]
         B --> C["Feed to SP1"]
     end
 
@@ -360,7 +362,7 @@ graph TD
 pq_bitcoin/
 ├── lib/                        # Core SDK library (crate: pq-bitcoin)
 │   ├── src/
-│   │   ├── lib.rs              # BTC/ETH derivation, ML-DSA constants, ABI types
+│   │   ├── lib.rs              # BTC/ETH derivation, migration message, ML-DSA constants, ABI types
 │   │   ├── error.rs            # PQBitcoinError enum (SDK error handling)
 │   │   ├── op_return.rs        # OP_RETURN payload format, script gen/parse
 │   │   └── taproot.rs          # BIP-341 Taproot PQ commitment tree
@@ -816,7 +818,7 @@ cargo run --release --bin evm -- --system plonk
 ### 4. Run All Tests
 
 ```sh
-# ── Rust library + integration tests + doctests (113 tests) ────
+# ── Rust library + integration tests + doctests (117 tests) ────
 cargo test -p pq-bitcoin
 
 # ── Migration indexer tests (23 tests) ─────────────────────────
@@ -825,7 +827,7 @@ cd indexer && cargo test && cd ..
 # ── Solidity contract tests (42 tests) ─────────────────────────
 cd contracts && forge test -vvv
 
-# ── Run everything at once (136 Rust + 42 Solidity = 178) ──────
+# ── Run everything at once (140 Rust + 42 Solidity = 182) ──────
 cargo test -p pq-bitcoin && cd indexer && cargo test && cd ../contracts && forge test -vvv && cd ..
 ```
 
@@ -834,15 +836,15 @@ cargo test -p pq-bitcoin && cd indexer && cargo test && cd ../contracts && forge
 ## Test Coverage
 
 ```mermaid
-pie title Test Distribution (178 total)
-    "Unit Tests" : 99
+pie title Test Distribution (182 total)
+    "Unit Tests" : 105
     "Integration Tests" : 12
     "Doctests" : 2
     "Indexer Tests" : 23
     "Solidity Tests" : 42
 ```
 
-### Rust Library — 99 Unit Tests + 2 Doctests
+### Rust Library — 105 Unit Tests + 2 Doctests
 
 | Category | Tests | What's Covered |
 |----------|-------|----------------|
@@ -852,6 +854,7 @@ pie title Test Distribution (178 total)
 | Level Names | 4 | ML-DSA-44/65/87 names, unknown size |
 | ABI Encoding | 4 | Roundtrip, empty fields, large key (2592B), SolValue trait |
 | Constants | 1 | ML_DSA_65_PK_SIZE, ML_DSA_65_SIG_SIZE, min/max sizes |
+| Migration Message | 6 | Prefix, length, determinism, different PQ keys, different addresses, PQ hash integrity |
 | OP_RETURN Encode/Decode | 8 | Roundtrip, size within 80B, magic/version, wrong magic/version, too short, empty |
 | Hash Commitments | 4 | Valid/invalid PQ key hash, valid/invalid proof hash |
 | ML-DSA Level Detection | 4 | Auto-detect 44/65/87 from key size, unknown |
@@ -869,7 +872,7 @@ pie title Test Distribution (178 total)
 | Control Blocks | 4 | PQ leaf structure, parity bit, timelock leaf structure, different siblings |
 | Edge Cases | 3 | ML-DSA-44 key, ML-DSA-87 key, timelock boundaries (16/128) |
 | Doctests | 2 | Crate-level quick start, `public_key_to_btc_address()` |
-| **Total** | **101** | |
+| **Total** | **107** | |
 
 ### Integration Tests — 12 Tests
 
@@ -903,16 +906,16 @@ pie title Test Distribution (178 total)
 | Merkle Tree | 5 | Initial state, root updates, multi-insert, dual-sig tree, leaf index events |
 | **Total** | **42** | |
 
-### Grand Total: 178 Tests
+### Grand Total: 184 Tests
 
 | Suite | Count |
 |-------|-------|
-| Rust Unit Tests | 99 |
+| Rust Unit Tests | 105 |
 | Rust Doctests | 2 |
 | Rust Integration Tests | 12 |
 | Indexer Tests | 23 |
 | Solidity Tests | 42 |
-| **Total** | **178** |
+| **Total** | **184** |
 
 ---
 
