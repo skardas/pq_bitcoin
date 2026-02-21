@@ -126,8 +126,9 @@ fn main() {
 
     println!("BTC Address (hex): {}", hex::encode(&address));
 
-    // Sign the address with PQ key to demonstrate it works
-    let _pq_sig = pq_signing_key.sign(&address);
+    // Sign migration message with PQ key (Scenario A, step 3)
+    let migration_msg = compute_btc_migration_message(&address, &pq_public_key_bytes);
+    let _pq_sig = pq_signing_key.sign(&migration_msg);
 
     // ── 4. Feed inputs to SP1 zkVM ─────────────────────────────
     let mut stdin = SP1Stdin::new();

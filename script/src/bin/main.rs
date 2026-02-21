@@ -119,8 +119,9 @@ fn main() {
     );
     println!("PQ Public Key Size: {} bytes", pq_public_key_bytes.len());
 
-    // Optionally sign Something with the PQ key to prove it works
-    let pq_sig = pq_signing_key.sign(&address);
+    // Sign migration message with PQ key (Scenario A, step 3)
+    let migration_msg = compute_btc_migration_message(&address, &pq_public_key_bytes);
+    let pq_sig = pq_signing_key.sign(&migration_msg);
     println!("PQ Signature Size: {} bytes", pq_sig.encode().len());
 
     // ── 4. Feed inputs to SP1 zkVM ─────────────────────────────
